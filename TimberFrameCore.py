@@ -941,16 +941,16 @@ def extract_wall_data(wall_obj):
 def _extract_opening_from_bim_object(obj, wall_obj):
     """Extract opening data from a BIM window or door object using bounding boxes."""
     try:
+        # Only accept actual windows / doors. Rejecting anything else here
+        # avoids e.g. a Roof used as a Subtraction being framed as a giant
+        # window (which also wipes out every stud behind it).
+        obj_type = _is_window_or_door(obj)
+        if obj_type is None:
+            return None
+
         # Get the object's bounding box - this tells us exactly where it is
         obj_bb = obj.Shape.BoundBox
         wall_bb = wall_obj.Shape.BoundBox
-        
-        # Determine opening type from IfcType
-        obj_type = "window"
-        if hasattr(obj, 'IfcType'):
-            ifc_type = str(obj.IfcType).lower()
-            if 'door' in ifc_type:
-                obj_type = "door"
         
         # Get opening dimensions from bounding box
         # For a wall along X axis: opening width is X size, height is Z size
@@ -987,17 +987,71 @@ def _extract_opening_from_bim_object(obj, wall_obj):
         return None
 
 
+def _is_window_or_door(obj):
+    """Return 'window', 'door', or None.
+
+    An object only counts as a wall opening if we can positively identify
+    it as a window or a door. Anything else (roofs, slabs, generic voids
+    used as Subtractions) must be rejected so we don't accidentally frame
+    around them: that would produce ghost king/jack/sill assemblies and
+    delete every stud behind the "opening".
+    """
+    try:
+        # Strongest signal: Arch workbench stores a human-readable type.
+        obj_class = type(obj).__name__
+        if obj_class in ('Window', 'ArchWindow'):
+            # Arch Window is used for both windows AND doors; disambiguate
+            # via IfcType / preset.
+            ifc = str(getattr(obj, 'IfcType', '')).lower()
+            if 'door' in ifc:
+                return 'door'
+            preset = str(getattr(obj, 'WindowType', '')).lower()
+            if 'door' in preset:
+                return 'door'
+            return 'window'
+        if obj_class in ('Door', 'ArchDoor'):
+            return 'door'
+        if obj_class in ('Roof', 'ArchRoof', 'Slab', 'ArchSlab',
+                         'Floor', 'ArchFloor', 'Wall', 'ArchWall'):
+            return None  # structural element, never an opening
+
+        # Fall back to IfcType / ObjectType strings.
+        ifc = str(getattr(obj, 'IfcType', '')).lower()
+        if 'door' in ifc:
+            return 'door'
+        if 'window' in ifc:
+            return 'window'
+        if ifc in ('roof', 'ifcroof', 'slab', 'ifcslab',
+                   'floor', 'ifcfloor', 'wall', 'ifcwall'):
+            return None
+
+        obj_type_str = str(getattr(obj, 'ObjectType', '')).lower()
+        if 'door' in obj_type_str:
+            return 'door'
+        if 'window' in obj_type_str:
+            return 'window'
+
+        # Last resort: label hints. We used to default to "window" here,
+        # which caused roof-cut subtractions to be framed as giant windows.
+        label = str(getattr(obj, 'Label', '')).lower()
+        if 'door' in label:
+            return 'door'
+        if 'window' in label:
+            return 'window'
+
+        return None
+    except Exception:
+        return None
+
+
 def _extract_opening_from_object(obj, wall_obj):
     """Extract opening data from a window or door object."""
     try:
-        # Determine if it's a door or window
-        obj_type = "window"
-        if hasattr(obj, 'IfcType'):
-            if 'door' in str(obj.IfcType).lower():
-                obj_type = "door"
-        elif hasattr(obj, 'ObjectType'):
-            if 'door' in str(obj.ObjectType).lower():
-                obj_type = "door"
+        obj_type = _is_window_or_door(obj)
+        if obj_type is None:
+            # Not an opening (e.g. a Roof used as a Subtraction to trim the
+            # wall's top). Silently ignore.
+            return None
         
         # Get dimensions
         width = float(getattr(obj, 'Width', getattr(obj, 'OverallWidth', 1000)))
