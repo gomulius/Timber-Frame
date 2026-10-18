@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- Solid wall (left side) -->
+  <rect x="4" y="8" width="24" height="48" fill="#808080" stroke="#404040" stroke-width="2"/>
+  
+  <!-- Arrow -->
+  <polygon points="34,32 40,26 40,29 48,29 48,35 40,35 40,38" fill="#4CAF50"/>
+  
+  <!-- Timber frame (right side) -->
+  <g transform="translate(32, 0)">
+    <!-- Bottom plate -->
+    <rect x="6" y="50" width="22" height="4" fill="#DEB887" stroke="#8B4513" stroke-width="1"/>
+    <!-- Top plate -->
+    <rect x="6" y="10" width="22" height="4" fill="#DEB887" stroke="#8B4513" stroke-width="1"/>
+    <!-- Left stud -->
+    <rect x="7" y="14" width="3" height="36" fill="#DEB887" stroke="#8B4513" stroke-width="1"/>
+    <!-- Middle stud -->
+    <rect x="15" y="14" width="3" height="36" fill="#DEB887" stroke="#8B4513" stroke-width="1"/>
+    <!-- Right stud -->
+    <rect x="24" y="14" width="3" height="36" fill="#DEB887" stroke="#8B4513" stroke-width="1"/>
+  </g>
+</svg>
