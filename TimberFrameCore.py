@@ -38,7 +38,19 @@ class TimberSettings:
         
         # Rough opening allowance (mm added to each side of window/door)
         self.rough_opening_gap = 10.0
-    
+
+        # -------- Floor (Base-to-Frame) settings --------
+        # Convert a BIM Slab into a timber floor platform. Default disabled
+        # so the existing wall-to-frame flow is untouched.
+        self.floor_enabled = False
+        self.joist_width = 45.0        # mm, narrow dimension (horizontal)
+        self.joist_depth = 220.0       # mm, structural dimension (vertical)
+        self.joist_spacing = 400.0     # mm, centre-to-centre
+        self.floor_rim_board = True    # Perimeter rim joists on open ends
+        self.floor_deck_direction = 'auto'  # 'auto' | 'X' | 'Y' (slab-local)
+        self.floor_sheathing_thickness = 22.0  # mm, 0 = no deck
+        self.floor_blocking_every = 0.0        # mm between rows, 0 = none
+
     def to_dict(self):
         """Convert settings to dictionary for storage."""
         return {
@@ -55,6 +67,16 @@ class TimberSettings:
             'header_width': self.header_width,
             'header_timber_depth': self.header_timber_depth,
             'rough_opening_gap': self.rough_opening_gap,
+
+            # Floor
+            'floor_enabled': self.floor_enabled,
+            'joist_width': self.joist_width,
+            'joist_depth': self.joist_depth,
+            'joist_spacing': self.joist_spacing,
+            'floor_rim_board': self.floor_rim_board,
+            'floor_deck_direction': self.floor_deck_direction,
+            'floor_sheathing_thickness': self.floor_sheathing_thickness,
+            'floor_blocking_every': self.floor_blocking_every,
         }
     
     def from_dict(self, data):
@@ -94,6 +116,7 @@ class TimberMember:
     """Represents a single piece of timber in the frame."""
     
     TYPES = {
+        # --- Wall members ---
         'bottom_plate': 'Bottom Plate',
         'top_plate': 'Top Plate',
         'top_plate_sloped': 'Top Plate (Sloped)',
@@ -104,6 +127,15 @@ class TimberMember:
         'sill': 'Rough Sill',
         'cripple_top': 'Cripple (Top)',
         'cripple_bottom': 'Cripple (Bottom)',
+
+        # --- Floor members (step 1: vocabulary only, no geometry yet) ---
+        'joist': 'Joist',
+        'rim_joist': 'Rim Joist',
+        'floor_trimmer': 'Trimmer Joist',
+        'floor_header': 'Floor Header',
+        'tail_joist': 'Tail Joist',
+        'floor_blocking': 'Blocking',
+        'floor_sheathing': 'Floor Sheathing',
     }
     
     def __init__(self, member_type, x, y, z, length, width, depth, orientation='vertical'):

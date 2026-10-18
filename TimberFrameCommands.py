@@ -23,10 +23,22 @@ class TimberFrameSettingsDialog(QtGui.QDialog):
     
     def setup_ui(self):
         self.setWindowTitle("Timber Frame Settings")
-        self.setMinimumWidth(400)
-        
-        layout = QtGui.QVBoxLayout(self)
-        
+        self.setMinimumWidth(440)
+        self.resize(460, 760)
+
+        outer_layout = QtGui.QVBoxLayout(self)
+
+        # Scroll area so the dialog stays usable as we add more features
+        # (floor, roof, siding, ...). Buttons stay fixed below the scroll.
+        scroll = QtGui.QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QtGui.QFrame.NoFrame)
+        outer_layout.addWidget(scroll, 1)
+
+        content = QtGui.QWidget()
+        scroll.setWidget(content)
+        layout = QtGui.QVBoxLayout(content)
+
         # Timber Dimensions Group
         timber_group = QtGui.QGroupBox("Timber Dimensions")
         timber_layout = QtGui.QFormLayout(timber_group)
@@ -111,20 +123,81 @@ class TimberFrameSettingsDialog(QtGui.QDialog):
         header_layout.addRow("Header Depth (into wall):", self.header_timber_depth_spin)
         
         layout.addWidget(header_group)
-        
-        # Buttons
+
+        # ---------------- Floor (Base-to-Frame) ----------------
+        floor_group = QtGui.QGroupBox("Floor (Base-to-Frame) - experimental")
+        floor_layout = QtGui.QFormLayout(floor_group)
+
+        self.floor_enabled_check = QtGui.QCheckBox(
+            "Enable floor framing when converting a BIM Slab"
+        )
+        self.floor_enabled_check.setChecked(False)
+        self.floor_enabled_check.stateChanged.connect(self._toggle_floor_options)
+        floor_layout.addRow("", self.floor_enabled_check)
+
+        floor_info = QtGui.QLabel(
+            "Note: slab conversion is not yet wired up. These settings are "
+            "persisted now so they can be picked up as soon as the geometry "
+            "step lands."
+        )
+        floor_info.setStyleSheet("color: gray; font-size: 10px;")
+        floor_info.setWordWrap(True)
+        floor_layout.addRow("", floor_info)
+
+        self.joist_width_spin = self._create_length_spinbox(20, 150, 45)
+        floor_layout.addRow("Joist Width:", self.joist_width_spin)
+
+        self.joist_depth_spin = self._create_length_spinbox(100, 400, 220)
+        floor_layout.addRow("Joist Depth:", self.joist_depth_spin)
+
+        self.joist_spacing_spin = self._create_length_spinbox(200, 800, 400)
+        floor_layout.addRow("Joist Spacing:", self.joist_spacing_spin)
+
+        self.floor_rim_check = QtGui.QCheckBox("Add perimeter rim joists")
+        self.floor_rim_check.setChecked(True)
+        floor_layout.addRow("", self.floor_rim_check)
+
+        self.floor_direction_combo = QtGui.QComboBox()
+        self.floor_direction_combo.addItems(["auto (short span)", "X", "Y"])
+        floor_layout.addRow("Joist Direction:", self.floor_direction_combo)
+
+        self.floor_sheathing_spin = self._create_length_spinbox(0, 50, 22)
+        self.floor_sheathing_spin.setSpecialValueText("off")
+        floor_layout.addRow("Sheathing Thickness:", self.floor_sheathing_spin)
+
+        self.floor_blocking_spin = self._create_length_spinbox(0, 3000, 0)
+        self.floor_blocking_spin.setSpecialValueText("off")
+        floor_layout.addRow("Blocking Every:", self.floor_blocking_spin)
+
+        layout.addWidget(floor_group)
+
+        self._floor_option_widgets = [
+            self.joist_width_spin, self.joist_depth_spin,
+            self.joist_spacing_spin, self.floor_rim_check,
+            self.floor_direction_combo, self.floor_sheathing_spin,
+            self.floor_blocking_spin,
+        ]
+        self._toggle_floor_options(QtCore.Qt.Unchecked)
+
+        # Buttons (fixed - outside the scroll area)
         button_box = QtGui.QDialogButtonBox(
             QtGui.QDialogButtonBox.Ok | QtGui.QDialogButtonBox.Cancel
         )
         button_box.accepted.connect(self.accept)
         button_box.rejected.connect(self.reject)
-        layout.addWidget(button_box)
+        outer_layout.addWidget(button_box)
     
     def _toggle_header_options(self, state):
         """Enable/disable header dimension inputs based on checkbox."""
         enabled = state != QtCore.Qt.Checked
         self.header_width_spin.setEnabled(enabled)
         self.header_timber_depth_spin.setEnabled(enabled)
+
+    def _toggle_floor_options(self, state):
+        """Grey out all Floor option widgets unless the enable checkbox is on."""
+        enabled = state == QtCore.Qt.Checked
+        for w in getattr(self, '_floor_option_widgets', ()):
+            w.setEnabled(enabled)
     
     def _create_length_spinbox(self, min_val, max_val, default):
         """Create a spinbox for length input (in mm)."""
@@ -153,7 +226,23 @@ class TimberFrameSettingsDialog(QtGui.QDialog):
         self.header_width_spin.setValue(s.header_width)
         self.header_timber_depth_spin.setValue(s.header_timber_depth)
         self._toggle_header_options(QtCore.Qt.Checked if s.header_use_same_timber else QtCore.Qt.Unchecked)
-    
+
+        # Floor settings
+        self.floor_enabled_check.setChecked(s.floor_enabled)
+        self.joist_width_spin.setValue(s.joist_width)
+        self.joist_depth_spin.setValue(s.joist_depth)
+        self.joist_spacing_spin.setValue(s.joist_spacing)
+        self.floor_rim_check.setChecked(s.floor_rim_board)
+        dir_index = {'auto': 0, 'X': 1, 'Y': 2}.get(
+            getattr(s, 'floor_deck_direction', 'auto'), 0
+        )
+        self.floor_direction_combo.setCurrentIndex(dir_index)
+        self.floor_sheathing_spin.setValue(s.floor_sheathing_thickness)
+        self.floor_blocking_spin.setValue(s.floor_blocking_every)
+        self._toggle_floor_options(
+            QtCore.Qt.Checked if s.floor_enabled else QtCore.Qt.Unchecked
+        )
+
     def save_settings(self):
         """Save UI values to settings."""
         s = self.settings
@@ -171,6 +260,19 @@ class TimberFrameSettingsDialog(QtGui.QDialog):
         s.header_use_same_timber = self.header_same_check.isChecked()
         s.header_width = self.header_width_spin.value()
         s.header_timber_depth = self.header_timber_depth_spin.value()
+
+        # Floor settings
+        s.floor_enabled = self.floor_enabled_check.isChecked()
+        s.joist_width = self.joist_width_spin.value()
+        s.joist_depth = self.joist_depth_spin.value()
+        s.joist_spacing = self.joist_spacing_spin.value()
+        s.floor_rim_board = self.floor_rim_check.isChecked()
+        s.floor_deck_direction = (
+            ['auto', 'X', 'Y'][self.floor_direction_combo.currentIndex()]
+        )
+        s.floor_sheathing_thickness = self.floor_sheathing_spin.value()
+        s.floor_blocking_every = self.floor_blocking_spin.value()
+
         return s
 
 
