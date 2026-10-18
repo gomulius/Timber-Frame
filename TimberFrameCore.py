@@ -689,68 +689,82 @@ def _get_height_at_x(top_profile, x_pos, default_height):
 
 def _get_segment_heights(wall_obj, seg_start, seg_end, default_height):
     """Get the wall height at the start and end of a segment.
-    
-    For sloped walls, the height may vary along the segment.
+
+    For walls shortened against a sloped roof the height varies along the
+    segment. The reliable way to find the wall's top at a given XY is to
+    probe the solid itself (not its vertex list): at an inside corner
+    between two sketch segments there is NO vertex of the wall shape at
+    that XY, so a vertex-proximity search silently falls back to the
+    default wall height and the top plate spikes up at every corner.
+
+    Strategy:
+      1. For each endpoint, build a vertical line from z=0 to a value far
+         above the wall and intersect it with the wall shape.
+      2. Take the highest Z of the resulting points. That's the top surface
+         height exactly at that XY.
+      3. If the intersection fails (e.g. the probe is right on the wall's
+         outer edge and misses the solid due to numeric roundoff), fall
+         back to a tiny inward step along the segment axis.
+      4. Only as a last resort, keep the previous vertex-scan behaviour so
+         we never regress on walls without a sloped top.
     """
     wall_shape = wall_obj.Shape
-    
-    # Cast rays downward from high above the segment endpoints to find top surface
-    ray_height = 10000  # Start ray from 10m up
-    tolerance = 50  # mm tolerance for matching
-    
-    height_start = default_height
-    height_end = default_height
-    
-    # Find highest Z at segment start point
+    bb = wall_shape.BoundBox
+    probe_top_z = bb.ZMax + 10.0 if bb.ZMax > 0 else 20000.0
+
+    def _probe_z(x, y):
+        """Return top-of-solid Z at XY, or None if no hit."""
+        import Part
+        try:
+            line = Part.makeLine(
+                FreeCAD.Vector(x, y, bb.ZMin - 1.0),
+                FreeCAD.Vector(x, y, probe_top_z),
+            )
+            common = wall_shape.common(line)
+            zs = [v.Point.z for v in common.Vertexes]
+            if zs:
+                return max(zs)
+        except Exception:
+            pass
+        return None
+
+    def _height_at(point, direction_sign, other_point):
+        # Try the exact endpoint first.
+        z = _probe_z(point.x, point.y)
+        if z is not None:
+            return z
+        # Nudge a few millimetres inward along the segment to escape the
+        # outer edge; try progressively larger offsets.
+        seg_dx = other_point.x - point.x
+        seg_dy = other_point.y - point.y
+        seg_len = math.sqrt(seg_dx * seg_dx + seg_dy * seg_dy) or 1.0
+        ux = seg_dx / seg_len
+        uy = seg_dy / seg_len
+        for step in (1.0, 5.0, 25.0, 100.0):
+            z = _probe_z(point.x + ux * step, point.y + uy * step)
+            if z is not None:
+                return z
+        return None
+
+    height_start = _height_at(seg_start, +1, seg_end)
+    height_end = _height_at(seg_end, -1, seg_start)
+
+    if height_start is not None and height_end is not None:
+        return height_start, height_end
+
+    # Fallback: original vertex-scan behaviour, used only when the solid
+    # probe failed on both ends (should be extremely rare).
+    tolerance = 50
+    hs = default_height if height_start is None else height_start
+    he = default_height if height_end is None else height_end
     for vertex in wall_shape.Vertexes:
         v = vertex.Point
-        # Check if vertex is near segment start (in XY plane)
-        dist_start = math.sqrt((v.x - seg_start.x)**2 + (v.y - seg_start.y)**2)
-        dist_end = math.sqrt((v.x - seg_end.x)**2 + (v.y - seg_end.y)**2)
-        
-        if dist_start < tolerance and v.z > 100:  # Near start, above ground
-            height_start = max(height_start, v.z) if height_start == default_height else max(height_start, v.z)
-        
-        if dist_end < tolerance and v.z > 100:  # Near end, above ground
-            height_end = max(height_end, v.z) if height_end == default_height else max(height_end, v.z)
-    
-    # If we found valid heights, use them
-    # Search all vertices more broadly if needed
-    if height_start == default_height or height_end == default_height:
-        # Broader search - find vertices along segment line
-        seg_dx = seg_end.x - seg_start.x
-        seg_dy = seg_end.y - seg_start.y
-        seg_len = math.sqrt(seg_dx**2 + seg_dy**2)
-        
-        if seg_len > 0:
-            # Normalize direction
-            dir_x = seg_dx / seg_len
-            dir_y = seg_dy / seg_len
-            
-            start_heights = []
-            end_heights = []
-            
-            for vertex in wall_shape.Vertexes:
-                v = vertex.Point
-                # Project vertex onto segment line
-                vx = v.x - seg_start.x
-                vy = v.y - seg_start.y
-                
-                # Distance along segment
-                along = vx * dir_x + vy * dir_y
-                # Distance from segment line
-                perp = abs(-vx * dir_y + vy * dir_x)
-                
-                if perp < tolerance + float(wall_obj.Width) / 2:
-                    if along < tolerance and along > -tolerance:
-                        start_heights.append(v.z)
-                    elif abs(along - seg_len) < tolerance:
-                        end_heights.append(v.z)
-            
-            if start_heights:
-                height_start = max(start_heights)
-            if end_heights:
-                height_end = max(end_heights)
+        if math.hypot(v.x - seg_start.x, v.y - seg_start.y) < tolerance and v.z > 100:
+            hs = max(hs, v.z)
+        if math.hypot(v.x - seg_end.x, v.y - seg_end.y) < tolerance and v.z > 100:
+            he = max(he, v.z)
+    height_start = hs
+    height_end = he
     
     return height_start, height_end
 

@@ -2,7 +2,7 @@
 # Run from the FreeCAD Python console:
 #   exec(open(r"C:\Users\gomul\AppData\Roaming\FreeCAD\v1-1\Mod\TimberFrame\diagnose_wall.py").read())
 
-WALL_LABEL = "Int Wall"   # <-- change this to the wall label in your model
+WALL_LABEL = "Ext Walls"   # <-- change this to the wall label in your model
 
 import FreeCAD, os, sys, importlib
 
