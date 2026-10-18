@@ -1,0 +1,1062 @@
+# TimberFrame Commands - FreeCAD GUI Commands
+
+import FreeCAD
+import FreeCADGui
+from PySide import QtCore, QtGui
+import os
+
+# Import core module
+try:
+    from . import TimberFrameCore as Core
+except ImportError:
+    import TimberFrameCore as Core
+
+
+class TimberFrameSettingsDialog(QtGui.QDialog):
+    """Dialog for configuring timber frame settings."""
+    
+    def __init__(self, settings=None, parent=None):
+        super().__init__(parent)
+        self.settings = settings or Core.TimberSettings()
+        self.setup_ui()
+        self.load_settings()
+    
+    def setup_ui(self):
+        self.setWindowTitle("Timber Frame Settings")
+        self.setMinimumWidth(400)
+        
+        layout = QtGui.QVBoxLayout(self)
+        
+        # Timber Dimensions Group
+        timber_group = QtGui.QGroupBox("Timber Dimensions")
+        timber_layout = QtGui.QFormLayout(timber_group)
+        
+        self.stud_width_spin = self._create_length_spinbox(20, 100, 45)
+        timber_layout.addRow("Stud Width:", self.stud_width_spin)
+        
+        self.stud_depth_spin = self._create_length_spinbox(50, 300, 145)
+        timber_layout.addRow("Stud Depth:", self.stud_depth_spin)
+        
+        layout.addWidget(timber_group)
+        
+        # Plates Group
+        plates_group = QtGui.QGroupBox("Plates")
+        plates_layout = QtGui.QFormLayout(plates_group)
+        
+        self.bottom_plate_spin = QtGui.QSpinBox()
+        self.bottom_plate_spin.setRange(1, 3)
+        self.bottom_plate_spin.setValue(1)
+        plates_layout.addRow("Bottom Plates:", self.bottom_plate_spin)
+        
+        self.top_plate_spin = QtGui.QSpinBox()
+        self.top_plate_spin.setRange(1, 3)
+        self.top_plate_spin.setValue(2)
+        plates_layout.addRow("Top Plates:", self.top_plate_spin)
+        
+        layout.addWidget(plates_group)
+        
+        # Spacing Group
+        spacing_group = QtGui.QGroupBox("Stud Spacing")
+        spacing_layout = QtGui.QFormLayout(spacing_group)
+        
+        self.stud_spacing_spin = self._create_length_spinbox(200, 800, 500)
+        spacing_layout.addRow("Stud Spacing (center-to-center):", self.stud_spacing_spin)
+        
+        layout.addWidget(spacing_group)
+        
+        # Opening Framing Group
+        opening_group = QtGui.QGroupBox("Opening Framing")
+        opening_layout = QtGui.QFormLayout(opening_group)
+        
+        self.header_depth_spin = self._create_length_spinbox(100, 400, 200)
+        opening_layout.addRow("Header Depth (height):", self.header_depth_spin)
+        
+        # Info label about header sizing
+        header_info = QtGui.QLabel("Typical: 1m span→90mm, 1.5m→135mm, 2m→180mm")
+        header_info.setStyleSheet("color: gray; font-size: 10px;")
+        opening_layout.addRow("", header_info)
+        
+        self.rough_gap_spin = self._create_length_spinbox(5, 50, 10)
+        opening_layout.addRow("Rough Opening Gap:", self.rough_gap_spin)
+        
+        self.king_stud_check = QtGui.QCheckBox("King Studs")
+        self.king_stud_check.setChecked(True)
+        opening_layout.addRow("", self.king_stud_check)
+        
+        self.jack_stud_check = QtGui.QCheckBox("Jack Studs")
+        self.jack_stud_check.setChecked(True)
+        opening_layout.addRow("", self.jack_stud_check)
+        
+        self.cripple_check = QtGui.QCheckBox("Cripple Studs")
+        self.cripple_check.setChecked(True)
+        opening_layout.addRow("", self.cripple_check)
+        
+        layout.addWidget(opening_group)
+        
+        # Header Timber Group
+        header_group = QtGui.QGroupBox("Header Timber (Lintels)")
+        header_layout = QtGui.QFormLayout(header_group)
+        
+        self.header_same_check = QtGui.QCheckBox("Use same timber as studs")
+        self.header_same_check.setChecked(True)
+        self.header_same_check.stateChanged.connect(self._toggle_header_options)
+        header_layout.addRow("", self.header_same_check)
+        
+        self.header_width_spin = self._create_length_spinbox(20, 200, 45)
+        self.header_width_spin.setEnabled(False)
+        header_layout.addRow("Header Width:", self.header_width_spin)
+        
+        self.header_timber_depth_spin = self._create_length_spinbox(50, 400, 145)
+        self.header_timber_depth_spin.setEnabled(False)
+        header_layout.addRow("Header Depth (into wall):", self.header_timber_depth_spin)
+        
+        layout.addWidget(header_group)
+        
+        # Buttons
+        button_box = QtGui.QDialogButtonBox(
+            QtGui.QDialogButtonBox.Ok | QtGui.QDialogButtonBox.Cancel
+        )
+        button_box.accepted.connect(self.accept)
+        button_box.rejected.connect(self.reject)
+        layout.addWidget(button_box)
+    
+    def _toggle_header_options(self, state):
+        """Enable/disable header dimension inputs based on checkbox."""
+        enabled = state != QtCore.Qt.Checked
+        self.header_width_spin.setEnabled(enabled)
+        self.header_timber_depth_spin.setEnabled(enabled)
+    
+    def _create_length_spinbox(self, min_val, max_val, default):
+        """Create a spinbox for length input (in mm)."""
+        spin = QtGui.QDoubleSpinBox()
+        spin.setRange(min_val, max_val)
+        spin.setValue(default)
+        spin.setSuffix(" mm")
+        spin.setDecimals(1)
+        return spin
+    
+    def load_settings(self):
+        """Load current settings into UI."""
+        s = self.settings
+        self.stud_width_spin.setValue(s.stud_width)
+        self.stud_depth_spin.setValue(s.stud_depth)
+        self.bottom_plate_spin.setValue(s.bottom_plate_count)
+        self.top_plate_spin.setValue(s.top_plate_count)
+        self.stud_spacing_spin.setValue(s.stud_spacing)
+        self.header_depth_spin.setValue(s.header_depth)
+        self.rough_gap_spin.setValue(s.rough_opening_gap)
+        self.king_stud_check.setChecked(s.king_stud_enabled)
+        self.jack_stud_check.setChecked(s.jack_stud_enabled)
+        self.cripple_check.setChecked(s.cripple_stud_enabled)
+        # Header timber settings
+        self.header_same_check.setChecked(s.header_use_same_timber)
+        self.header_width_spin.setValue(s.header_width)
+        self.header_timber_depth_spin.setValue(s.header_timber_depth)
+        self._toggle_header_options(QtCore.Qt.Checked if s.header_use_same_timber else QtCore.Qt.Unchecked)
+    
+    def save_settings(self):
+        """Save UI values to settings."""
+        s = self.settings
+        s.stud_width = self.stud_width_spin.value()
+        s.stud_depth = self.stud_depth_spin.value()
+        s.bottom_plate_count = self.bottom_plate_spin.value()
+        s.top_plate_count = self.top_plate_spin.value()
+        s.stud_spacing = self.stud_spacing_spin.value()
+        s.header_depth = self.header_depth_spin.value()
+        s.rough_opening_gap = self.rough_gap_spin.value()
+        s.king_stud_enabled = self.king_stud_check.isChecked()
+        s.jack_stud_enabled = self.jack_stud_check.isChecked()
+        s.cripple_stud_enabled = self.cripple_check.isChecked()
+        # Header timber settings
+        s.header_use_same_timber = self.header_same_check.isChecked()
+        s.header_width = self.header_width_spin.value()
+        s.header_timber_depth = self.header_timber_depth_spin.value()
+        return s
+
+
+def _tag_frame_group(group, wall, settings):
+    """Attach SourceWall + settings metadata to a frame group so that the
+    Regenerate command can later rebuild it from the (possibly modified)
+    source wall. Safe to call multiple times."""
+    import json
+    try:
+        if not hasattr(group, 'SourceWall'):
+            group.addProperty(
+                "App::PropertyLink", "SourceWall", "TimberFrame",
+                "Source BIM wall this frame was generated from"
+            )
+        group.SourceWall = wall
+
+        if not hasattr(group, 'TimberSettingsJSON'):
+            group.addProperty(
+                "App::PropertyString", "TimberSettingsJSON", "TimberFrame",
+                "Settings used to generate this frame (JSON)"
+            )
+        group.TimberSettingsJSON = json.dumps(settings.to_dict())
+    except Exception as e:
+        FreeCAD.Console.PrintWarning(
+            f"Could not tag frame group '{group.Label}': {e}\n"
+        )
+
+
+def _frame_groups_with_source(doc):
+    """Return every frame group that has a SourceWall link (i.e. that we
+    know how to regenerate)."""
+    out = []
+    for obj in doc.Objects:
+        if (obj.Label.startswith("Frame_")
+                and hasattr(obj, 'SourceWall')
+                and obj.SourceWall is not None):
+            out.append(obj)
+    return out
+
+
+def _delete_frame_group_recursive(doc, group):
+    """Delete a frame group and all objects it (transitively) contains."""
+    # Snapshot contents first - mutating the group as we iterate is unsafe.
+    to_remove = []
+    stack = list(getattr(group, 'Group', []))
+    while stack:
+        obj = stack.pop()
+        if obj is None:
+            continue
+        # If it's a sub-group, descend into it before removing.
+        if hasattr(obj, 'Group'):
+            stack.extend(obj.Group)
+        to_remove.append(obj)
+    for obj in to_remove:
+        try:
+            doc.removeObject(obj.Name)
+        except Exception:
+            pass
+    try:
+        doc.removeObject(group.Name)
+    except Exception:
+        pass
+
+
+class ConvertWallCommand:
+    """Command to convert a BIM wall to timber frame."""
+    
+    def GetResources(self):
+        return {
+            'MenuText': "Convert Wall to Frame",
+            'ToolTip': "Convert selected BIM wall(s) to timber frame structure",
+            'Pixmap': self._get_icon('convert_wall.svg'),
+        }
+    
+    def _get_icon(self, name):
+        workbench_path = os.path.join(FreeCAD.getUserAppDataDir(), "Mod", "TimberFrame")
+        icon_path = os.path.join(workbench_path, "Resources", "icons", name)
+        if os.path.exists(icon_path):
+            return icon_path
+        return ""
+    
+    def IsActive(self):
+        """Command is active when walls are selected."""
+        if FreeCAD.ActiveDocument is None:
+            return False
+        sel = FreeCADGui.Selection.getSelection()
+        return len(sel) > 0
+    
+    def Activated(self):
+        """Execute the command."""
+        doc = FreeCAD.ActiveDocument
+        selection = FreeCADGui.Selection.getSelection()
+        
+        if not selection:
+            QtGui.QMessageBox.warning(None, "No Selection", "Please select one or more walls to convert.")
+            return
+        
+        # Filter to walls only
+        walls = []
+        for obj in selection:
+            # Check if it's a wall (Arch::Wall or similar)
+            if hasattr(obj, 'IfcType') and 'wall' in str(obj.IfcType).lower():
+                walls.append(obj)
+            elif hasattr(obj, 'Proxy') and hasattr(obj.Proxy, '__class__'):
+                if 'Wall' in obj.Proxy.__class__.__name__:
+                    walls.append(obj)
+            elif 'Wall' in obj.TypeId or (hasattr(obj, 'Height') and hasattr(obj, 'Length') and hasattr(obj, 'Width')):
+                walls.append(obj)
+        
+        if not walls:
+            QtGui.QMessageBox.warning(None, "No Walls", "No wall objects found in selection.\nPlease select BIM/Arch walls.")
+            return
+        
+        # Show settings dialog
+        settings = Core.TimberSettings()
+        dialog = TimberFrameSettingsDialog(settings)
+        
+        if dialog.exec_() != QtGui.QDialog.Accepted:
+            return
+        
+        settings = dialog.save_settings()
+        
+        # Process each wall
+        doc.openTransaction("Convert Walls to Timber Frame")
+        try:
+            for wall in walls:
+                self._convert_wall(doc, wall, settings)
+            doc.commitTransaction()
+            doc.recompute()
+            FreeCAD.Console.PrintMessage(f"Converted {len(walls)} wall(s) to timber frame.\n")
+        except Exception as e:
+            doc.abortTransaction()
+            FreeCAD.Console.PrintError(f"Error converting walls: {e}\n")
+            QtGui.QMessageBox.critical(None, "Error", f"Failed to convert walls:\n{str(e)}")
+    
+    def _convert_wall(self, doc, wall, settings):
+        """Convert a single wall to timber frame."""
+        
+        # Check for multi-segment wall
+        segments = Core.extract_wall_segments(wall)
+        
+        if segments and len(segments) > 1:
+            # Multi-segment wall - create frame for each segment
+            FreeCAD.Console.PrintMessage(
+                f"Converting multi-segment wall '{wall.Label}': {len(segments)} segments\n"
+            )
+            return self._convert_multi_segment_wall(doc, wall, segments, settings)
+        
+        # Single segment wall - standard processing
+        wall_data = Core.extract_wall_data(wall)
+        
+        FreeCAD.Console.PrintMessage(
+            f"Converting wall '{wall.Label}': {wall_data['length']:.0f} x {wall_data['height']:.0f} mm, "
+            f"{len(wall_data['openings'])} opening(s)\n"
+        )
+        
+        # Create frame calculator
+        calc = Core.WallFrameCalculator(
+            wall_data['length'],
+            wall_data['height'],
+            wall_data['width'],
+            settings,
+            top_profile=wall_data.get('top_profile')  # For sloped walls
+        )
+        
+        # Add openings
+        for opening in wall_data['openings']:
+            calc.add_opening(opening)
+            FreeCAD.Console.PrintMessage(f"  Opening: {opening}\n")
+        
+        # Calculate frame
+        members = calc.calculate_frame()
+        FreeCAD.Console.PrintMessage(f"  Generated {len(members)} timber members\n")
+        
+        # Create 3D geometry
+        group = Core.create_frame_group(doc, wall, members, settings=settings)
+
+        # Tag the frame group with its source wall and the settings used,
+        # so Regenerate can re-run the conversion on the same inputs later.
+        _tag_frame_group(group, wall, settings)
+
+        # Create editable sketch for stud positions
+        sketch = Core.create_frame_sketch(doc, wall, members, settings)
+
+        # The frame REPLACES the wall. Hide the original BIM wall so the
+        # frame alone represents the structure and the building's outer
+        # dimensions are driven by the frame, not by the (now hidden) wall.
+        try:
+            if wall.ViewObject is not None:
+                wall.ViewObject.Visibility = False
+        except Exception:
+            pass
+
+        return group
+    
+    def _convert_multi_segment_wall(self, doc, wall, segments, settings):
+        """Convert a multi-segment wall (L-shaped, etc.) to timber frames."""
+        import Part
+        import math
+        from FreeCAD import Vector, Placement, Rotation
+        
+        # Create a parent group for all segments
+        parent_group = doc.addObject("App::DocumentObjectGroup", f"Frame_{wall.Label}")
+        # Tag it so Regenerate can find and rebuild it later.
+        _tag_frame_group(parent_group, wall, settings)
+        
+        # Find all openings hosted by this wall
+        all_openings = []
+        for obj in doc.Objects:
+            if hasattr(obj, 'Hosts'):
+                hosts = obj.Hosts if isinstance(obj.Hosts, list) else [obj.Hosts]
+                if wall in hosts:
+                    all_openings.append(obj)
+        
+        # Segments use raw sketch endpoints (centerline). No in-plane
+        # extension and no cross-axis offset: segment placement is identical
+        # to the behaviour that was known good before the Align experiments.
+        for seg in segments:
+            seg['_x_shift'] = 0.0
+
+            seg_name = f"{wall.Label}_Seg{seg['index']}"
+            FreeCAD.Console.PrintMessage(
+                f"  Segment {seg['index']}: length={seg['length']:.0f}mm, angle={seg['angle']:.1f}°\n"
+            )
+            
+            # Find openings that belong to this segment
+            seg_openings = []
+            seg_start = seg['start']
+            seg_end = seg['end']
+            seg_angle_rad = seg['angle'] * math.pi / 180
+            
+            for opening_obj in all_openings:
+                # Get opening bounding box
+                open_bb = opening_obj.Shape.BoundBox
+                open_center = Vector(
+                    (open_bb.XMin + open_bb.XMax) / 2,
+                    (open_bb.YMin + open_bb.YMax) / 2,
+                    open_bb.ZMin
+                )
+                
+                # Transform opening center to segment local coordinates
+                dx = open_center.x - seg_start.x
+                dy = open_center.y - seg_start.y
+                
+                # Project onto segment direction
+                local_x = dx * math.cos(seg_angle_rad) + dy * math.sin(seg_angle_rad)
+                local_y = -dx * math.sin(seg_angle_rad) + dy * math.cos(seg_angle_rad)
+                
+                # More generous tolerance for matching - wall width + 500mm
+                tolerance = seg['width'] + 500
+                
+                # Check if within segment bounds
+                in_segment = (0 - tolerance/2) <= local_x <= (seg['length'] + tolerance/2)
+                near_wall = abs(local_y) < tolerance
+                
+                FreeCAD.Console.PrintMessage(f"    Checking {opening_obj.Label}: local_x={local_x:.0f}, local_y={local_y:.0f}, in_seg={in_segment}, near={near_wall}\n")
+                
+                if in_segment and near_wall:
+                    # This opening belongs to this segment
+                    open_width = open_bb.XMax - open_bb.XMin
+                    open_height = open_bb.ZMax - open_bb.ZMin
+                    
+                    # For angled segments, recalculate width along segment
+                    if abs(seg['angle']) > 1 and abs(seg['angle']) < 179:  # Not axis-aligned
+                        open_width = max(open_bb.XMax - open_bb.XMin, open_bb.YMax - open_bb.YMin)
+                    
+                    # Determine type
+                    open_type = "window"
+                    if hasattr(opening_obj, 'IfcType') and 'door' in str(opening_obj.IfcType).lower():
+                        open_type = "door"
+                    
+                    # Clamp local_x to be within segment
+                    local_x = max(open_width/2, min(local_x, seg['length'] - open_width/2))
+                    
+                    # local_x was computed relative to the original
+                    # (non-extended) segment start; add the shift so the
+                    # opening keeps its real-world X.
+                    seg_openings.append(Core.Opening(
+                        x_position=local_x + seg.get('_x_shift', 0.0),
+                        width=open_width,
+                        height=open_height,
+                        sill_height=max(0, open_bb.ZMin),
+                        opening_type=open_type
+                    ))
+                    FreeCAD.Console.PrintMessage(f"    *** Found {open_type}: {opening_obj.Label} at local_x={local_x:.0f}\n")
+            
+            # Check if segment has sloped top
+            height_start = seg.get('height_start', seg['height'])
+            height_end = seg.get('height_end', seg['height'])
+            
+            is_sloped = abs(height_start - height_end) > 50  # More than 50mm difference
+            
+            if is_sloped:
+                FreeCAD.Console.PrintMessage(f"    Sloped segment: height {height_start:.0f} -> {height_end:.0f}\n")
+                # Create top profile for sloped segment
+                top_profile = [
+                    (0, height_start),
+                    (seg['length'], height_end)
+                ]
+                use_height = max(height_start, height_end)
+            else:
+                FreeCAD.Console.PrintMessage(f"    Flat segment: height {height_start:.0f}\n")
+                top_profile = None
+                use_height = height_start  # Use actual height, not max wall height
+            
+            # Create frame calculator for this segment
+            calc = Core.WallFrameCalculator(
+                seg['length'],
+                use_height,
+                seg['width'],
+                settings,
+                top_profile=top_profile
+            )
+            
+            # Add openings for this segment
+            for opening in seg_openings:
+                calc.add_opening(opening)
+            
+            # Calculate frame members (in local coordinates)
+            members = calc.calculate_frame()
+            
+            # Create geometry for this segment
+            seg_group = doc.addObject("App::DocumentObjectGroup", f"Frame_{seg_name}")
+            
+            # Calculate placement for this segment
+            # Note: Z stays at 0 in placement - members have Z built into their shapes
+            seg_placement = Placement(
+                Vector(seg['start'].x, seg['start'].y, 0),  # Z=0, shapes have correct Z
+                Rotation(Vector(0, 0, 1), seg['angle'])
+            )
+            
+            # Create timber members with segment placement
+            for member in members:
+                if member.orientation == 'vertical':
+                    box = Part.makeBox(
+                        member.width, member.depth, member.length,
+                        Vector(member.x, member.y, member.z)
+                    )
+                elif member.orientation == 'sloped':
+                    # Sloped member (angled top plate) - tilted beam following roof.
+                    # Build the tilted beam directly from a polygon face
+                    # extruded along +Z by the plate thickness. This matches
+                    # the technique used in TimberFrameCore.py and avoids
+                    # relying on Shape.rotated()/translated(), which are not
+                    # uniformly non-mutating across FreeCAD versions. The old
+                    # code assigned the return value (None) back to `box`,
+                    # which raised an exception and silently fell through to
+                    # the flat-box fallback - the reason sloped beams showed
+                    # up straight instead of tilted.
+                    z_start = member.z
+                    z_end = member.z_end if hasattr(member, 'z_end') else member.z
+
+                    try:
+                        dz = z_end - z_start
+                        FreeCAD.Console.PrintMessage(
+                            f"    Creating sloped plate: dz={dz:.0f}mm, "
+                            f"length={member.length:.0f}mm, z_start={z_start:.0f}\n"
+                        )
+
+                        # Four corners of the plate's bottom face in LOCAL
+                        # segment coordinates. The far end is lifted by dz so
+                        # the plate tilts to follow the roof slope.
+                        pts = [
+                            Vector(member.x,                 member.y,                z_start),
+                            Vector(member.x + member.length, member.y,                z_end),
+                            Vector(member.x + member.length, member.y + member.width, z_end),
+                            Vector(member.x,                 member.y + member.width, z_start),
+                        ]
+                        bottom_wire = Part.makePolygon(pts + [pts[0]])
+                        bottom_face = Part.Face(bottom_wire)
+
+                        # Extrude upward by the plate thickness to form the beam.
+                        box = bottom_face.extrude(Vector(0, 0, member.depth))
+
+                    except Exception as e:
+                        import traceback
+                        FreeCAD.Console.PrintError(f"Error creating sloped plate: {e}\n")
+                        FreeCAD.Console.PrintError(traceback.format_exc())
+                        # Fallback to flat box (keeps generation from aborting)
+                        box = Part.makeBox(
+                            member.length, member.width, member.depth,
+                            Vector(member.x, member.y, z_start)
+                        )
+                else:
+                    box = Part.makeBox(
+                        member.length, member.width, member.depth,
+                        Vector(member.x, member.y, member.z)
+                    )
+                
+                part_obj = doc.addObject("Part::Feature", member.get_label())
+                part_obj.Shape = box
+                # Apply segment placement but preserve Z from the shape
+                final_placement = Placement(seg_placement)
+                # The shape already has correct Z, placement should only rotate around Z and offset XY
+                part_obj.Placement = final_placement
+                
+                # Add properties
+                part_obj.addProperty("App::PropertyString", "TimberType", "Timber", "Type of timber member")
+                part_obj.TimberType = member.member_type
+                part_obj.addProperty("App::PropertyFloat", "TimberLength", "Timber", "Length of timber piece")
+                part_obj.TimberLength = member.length
+                
+                # Apply wood appearance
+                if part_obj.ViewObject:
+                    Core._apply_wood_appearance(part_obj.ViewObject, member.member_type)
+                
+                seg_group.addObject(part_obj)
+            
+            parent_group.addObject(seg_group)
+            FreeCAD.Console.PrintMessage(f"    Generated {len(members)} members\n")
+
+        # Hide the original BIM wall - the frame now represents it.
+        try:
+            if wall.ViewObject is not None:
+                wall.ViewObject.Visibility = False
+        except Exception:
+            pass
+
+        return parent_group
+
+
+class EditFrameCommand:
+    """Command to edit a timber frame using sketcher."""
+    
+    def GetResources(self):
+        return {
+            'MenuText': "Edit Frame Layout",
+            'ToolTip': "Edit timber frame stud positions using Sketcher",
+            'Pixmap': "",
+        }
+    
+    def IsActive(self):
+        if FreeCAD.ActiveDocument is None:
+            return False
+        # Check if a frame sketch exists
+        for obj in FreeCAD.ActiveDocument.Objects:
+            if obj.Label.startswith("FrameSketch_"):
+                return True
+        return False
+    
+    def Activated(self):
+        doc = FreeCAD.ActiveDocument
+        
+        # Find frame sketches
+        sketches = [obj for obj in doc.Objects if obj.Label.startswith("FrameSketch_")]
+        
+        if not sketches:
+            QtGui.QMessageBox.warning(None, "No Sketch", "No frame sketch found.\nConvert a wall first.")
+            return
+        
+        # Select sketch to edit
+        if len(sketches) > 1:
+            items = [s.Label for s in sketches]
+            item, ok = QtGui.QInputDialog.getItem(
+                None, "Select Sketch", "Choose frame sketch to edit:", items, 0, False
+            )
+            if not ok:
+                return
+            sketch = next(s for s in sketches if s.Label == item)
+        else:
+            sketch = sketches[0]
+        
+        # Open sketch in sketcher workbench
+        FreeCADGui.Selection.clearSelection()
+        FreeCADGui.Selection.addSelection(sketch)
+        FreeCADGui.runCommand('Sketcher_EditSketch', 0)
+        
+        QtGui.QMessageBox.information(
+            None,
+            "Edit Frame Layout",
+            "The frame sketch is now open for editing.\n\n"
+            "• Move stud lines to adjust positions\n"
+            "• Delete lines to remove studs\n"
+            "• Add new vertical lines to add studs\n\n"
+            "When done, close the sketch and use\n"
+            "'Rebuild Frame from Sketch' to update the 3D frame."
+        )
+
+
+class RebuildFrameCommand:
+    """Command to rebuild 3D frame from edited sketch."""
+    
+    def GetResources(self):
+        return {
+            'MenuText': "Rebuild Frame from Sketch",
+            'ToolTip': "Regenerate 3D frame from edited sketch",
+            'Pixmap': "",
+        }
+    
+    def IsActive(self):
+        if FreeCAD.ActiveDocument is None:
+            return False
+        for obj in FreeCAD.ActiveDocument.Objects:
+            if obj.Label.startswith("FrameSketch_"):
+                return True
+        return False
+    
+    def Activated(self):
+        doc = FreeCAD.ActiveDocument
+        
+        # Find frame sketches
+        sketches = [obj for obj in doc.Objects if obj.Label.startswith("FrameSketch_")]
+        
+        if not sketches:
+            QtGui.QMessageBox.warning(None, "No Sketch", "No frame sketch found.")
+            return
+        
+        # Select sketch
+        if len(sketches) > 1:
+            items = [s.Label for s in sketches]
+            item, ok = QtGui.QInputDialog.getItem(
+                None, "Select Sketch", "Choose frame sketch to rebuild:", items, 0, False
+            )
+            if not ok:
+                return
+            sketch = next(s for s in sketches if s.Label == item)
+        else:
+            sketch = sketches[0]
+        
+        # Rebuild
+        try:
+            doc.openTransaction("Rebuild Timber Frame")
+            Core.rebuild_frame_from_sketch(doc, sketch)
+            doc.commitTransaction()
+            doc.recompute()
+            FreeCAD.Console.PrintMessage("Frame rebuilt from sketch.\n")
+        except Exception as e:
+            doc.abortTransaction()
+            FreeCAD.Console.PrintError(f"Error rebuilding frame: {e}\n")
+            QtGui.QMessageBox.critical(None, "Error", f"Failed to rebuild frame:\n{str(e)}")
+
+
+class RegenerateFrameCommand:
+    """Regenerate an existing timber frame from its source BIM wall.
+
+    This re-runs the full conversion pipeline for the frame's SourceWall
+    with the settings that were used when it was first generated. Use this
+    after changing wall properties (Align, Height, openings, ...) so you
+    don't have to delete the frame by hand and build a new one from scratch.
+    """
+
+    def GetResources(self):
+        return {
+            'MenuText': "Regenerate Frame from Wall",
+            'ToolTip': (
+                "Rebuild the selected timber frame from its source BIM wall. "
+                "Picks up changes to the wall's Align / Height / Width / openings."
+            ),
+            'Pixmap': "",
+        }
+
+    def IsActive(self):
+        if FreeCAD.ActiveDocument is None:
+            return False
+        return bool(_frame_groups_with_source(FreeCAD.ActiveDocument))
+
+    def Activated(self):
+        doc = FreeCAD.ActiveDocument
+        groups = _frame_groups_with_source(doc)
+        if not groups:
+            QtGui.QMessageBox.warning(
+                None, "No Frame",
+                "No regenerable timber frame found.\n"
+                "Convert a wall first - frames created by this version are "
+                "tagged with a SourceWall link that makes them regenerable."
+            )
+            return
+
+        # Prefer whatever the user has selected in the tree.
+        selected = FreeCADGui.Selection.getSelection() if FreeCADGui else []
+        selected_groups = [g for g in groups if g in selected]
+        if selected_groups:
+            targets = selected_groups
+        elif len(groups) == 1:
+            targets = groups
+        else:
+            items = [g.Label for g in groups]
+            item, ok = QtGui.QInputDialog.getItem(
+                None, "Regenerate Frame",
+                "Choose the frame to regenerate:", items, 0, False
+            )
+            if not ok:
+                return
+            targets = [next(g for g in groups if g.Label == item)]
+
+        import json
+        doc.openTransaction("Regenerate Timber Frame")
+        try:
+            for group in targets:
+                wall = group.SourceWall
+                if wall is None:
+                    FreeCAD.Console.PrintWarning(
+                        f"'{group.Label}' has no SourceWall - skipped.\n"
+                    )
+                    continue
+
+                # Rehydrate the settings that were used originally so a
+                # regenerate doesn't silently reset the user's choices.
+                settings = Core.TimberSettings()
+                raw = getattr(group, 'TimberSettingsJSON', '') or ''
+                if raw:
+                    try:
+                        settings.from_dict(json.loads(raw))
+                    except Exception as e:
+                        FreeCAD.Console.PrintWarning(
+                            f"Could not read saved settings for "
+                            f"'{group.Label}' ({e}); using defaults.\n"
+                        )
+
+                # Clean up: delete this frame group and any FrameSketch
+                # that was created alongside it (single-segment path only).
+                sketch_label = f"FrameSketch_{wall.Label}"
+                for obj in list(doc.Objects):
+                    if obj.Label == sketch_label:
+                        try:
+                            doc.removeObject(obj.Name)
+                        except Exception:
+                            pass
+                _delete_frame_group_recursive(doc, group)
+
+                # Re-run the exact same conversion.
+                ConvertWallCommand()._convert_wall(doc, wall, settings)
+                FreeCAD.Console.PrintMessage(
+                    f"Regenerated frame for '{wall.Label}' "
+                    f"(Align={getattr(wall, 'Align', 'Left')}).\n"
+                )
+
+            doc.commitTransaction()
+            doc.recompute()
+        except Exception as e:
+            doc.abortTransaction()
+            import traceback
+            FreeCAD.Console.PrintError(
+                f"Error regenerating frame: {e}\n{traceback.format_exc()}"
+            )
+            QtGui.QMessageBox.critical(
+                None, "Error", f"Failed to regenerate frame:\n{e}"
+            )
+
+
+class GenerateBlueprintCommand:
+    """Command to generate 2D blueprints of timber frames."""
+    
+    def GetResources(self):
+        return {
+            'MenuText': "Generate Blueprint",
+            'ToolTip': "Generate 2D blueprint drawings with dimensions",
+            'Pixmap': "",
+        }
+    
+    def IsActive(self):
+        if FreeCAD.ActiveDocument is None:
+            return False
+        # Check if there are any frame groups
+        for obj in FreeCAD.ActiveDocument.Objects:
+            if obj.Label.startswith("Frame_") or (
+                hasattr(obj, 'TypeId') and 'Group' in obj.TypeId
+            ):
+                return True
+        return False
+    
+    def Activated(self):
+        """Generate TechDraw views of the frame."""
+        doc = FreeCAD.ActiveDocument
+        
+        # Find frame groups
+        frame_groups = []
+        for obj in doc.Objects:
+            if obj.Label.startswith("Frame_"):
+                frame_groups.append(obj)
+        
+        if not frame_groups:
+            QtGui.QMessageBox.warning(None, "No Frames", "No timber frame groups found.\nConvert walls first.")
+            return
+        
+        # Select which frame to blueprint
+        if len(frame_groups) > 1:
+            items = [g.Label for g in frame_groups]
+            item, ok = QtGui.QInputDialog.getItem(
+                None, "Select Frame", "Choose frame for blueprint:", items, 0, False
+            )
+            if not ok:
+                return
+            frame_group = next(g for g in frame_groups if g.Label == item)
+        else:
+            frame_group = frame_groups[0]
+        
+        try:
+            self._create_blueprint(doc, frame_group)
+            doc.recompute()
+            FreeCAD.Console.PrintMessage(f"Blueprint created for {frame_group.Label}\n")
+        except Exception as e:
+            FreeCAD.Console.PrintError(f"Error creating blueprint: {e}\n")
+            QtGui.QMessageBox.critical(None, "Error", f"Failed to create blueprint:\n{str(e)}")
+    
+    def _create_blueprint(self, doc, frame_group):
+        """Create TechDraw page with frame views."""
+        import TechDraw
+        
+        # Create page
+        page_name = f"Blueprint_{frame_group.Label}"
+        page = doc.addObject("TechDraw::DrawPage", page_name)
+        
+        # Add template (A3 landscape ISO)
+        template = doc.addObject("TechDraw::DrawSVGTemplate", f"Template_{frame_group.Label}")
+        
+        # Try to find a template file
+        template_paths = [
+            "C:/Program Files/FreeCAD 1.1/data/Mod/TechDraw/Templates/ISO/A3_Landscape_blank.svg",
+            "C:/Program Files/FreeCAD 1.1/data/Mod/TechDraw/Templates/ISO/A3_Landscape_TD.svg",
+            os.path.join(FreeCAD.getResourceDir(), "Mod", "TechDraw", "Templates", "ISO", "A3_Landscape_blank.svg"),
+        ]
+        
+        template_found = False
+        for tpath in template_paths:
+            if os.path.exists(tpath):
+                template.Template = tpath
+                page.Template = template
+                template_found = True
+                break
+        
+        if not template_found:
+            FreeCAD.Console.PrintWarning("Could not find TechDraw template, using page without template\n")
+        
+        # Get all timber objects in the group
+        timber_objects = [obj for obj in frame_group.Group if hasattr(obj, 'Shape')]
+        
+        if not timber_objects:
+            FreeCAD.Console.PrintWarning("No timber objects found in group\n")
+            return
+        
+        # Create front view (elevation)
+        front_view = doc.addObject("TechDraw::DrawViewPart", f"FrontView_{frame_group.Label}")
+        front_view.Source = timber_objects
+        front_view.Direction = FreeCAD.Vector(0, -1, 0)  # Looking from front
+        front_view.Scale = 0.02  # 1:50 scale
+        front_view.X = 150
+        front_view.Y = 200
+        page.addView(front_view)
+        
+        # Add title annotation
+        title = doc.addObject("TechDraw::DrawViewAnnotation", f"Title_{frame_group.Label}")
+        title.Text = [frame_group.Label.replace("Frame_", "Wall Frame: ")]
+        title.X = 150
+        title.Y = 280
+        title.TextSize = 7
+        page.addView(title)
+        
+        return page
+
+
+class GenerateCutListCommand:
+    """Command to generate a cut list / material summary."""
+    
+    def GetResources(self):
+        return {
+            'MenuText': "Generate Cut List",
+            'ToolTip': "Generate material cut list with quantities",
+            'Pixmap': "",
+        }
+    
+    def IsActive(self):
+        if FreeCAD.ActiveDocument is None:
+            return False
+        for obj in FreeCAD.ActiveDocument.Objects:
+            if obj.Label.startswith("Frame_"):
+                return True
+        return False
+    
+    def Activated(self):
+        """Generate cut list spreadsheet."""
+        doc = FreeCAD.ActiveDocument
+        
+        # Collect all timber members from all frame groups
+        all_members = []
+        frame_count = 0
+        
+        for obj in doc.Objects:
+            if obj.Label.startswith("Frame_"):
+                frame_count += 1
+                for timber in obj.Group:
+                    if hasattr(timber, 'TimberType') and hasattr(timber, 'TimberLength'):
+                        all_members.append({
+                            'type': timber.TimberType,
+                            'length': timber.TimberLength,
+                            'label': timber.Label,
+                            'frame': obj.Label,
+                        })
+        
+        if not all_members:
+            QtGui.QMessageBox.warning(None, "No Data", "No timber members found in frame groups.")
+            return
+        
+        # Create or get spreadsheet
+        sheet_name = "TimberCutList"
+        if hasattr(doc, sheet_name):
+            sheet = getattr(doc, sheet_name)
+            # Clear existing content
+            sheet.clear("A1:Z1000")
+        else:
+            sheet = doc.addObject("Spreadsheet::Sheet", sheet_name)
+        
+        # Aggregate by type and length
+        cut_list = {}
+        for m in all_members:
+            key = (m['type'], round(m['length']))
+            if key not in cut_list:
+                cut_list[key] = {'count': 0, 'total': 0}
+            cut_list[key]['count'] += 1
+            cut_list[key]['total'] += m['length']
+        
+        # Write header
+        sheet.set('A1', 'TIMBER CUT LIST')
+        sheet.set('A2', f'Total Frames: {frame_count}')
+        sheet.set('A3', f'Total Pieces: {len(all_members)}')
+        
+        sheet.set('A5', 'Type')
+        sheet.set('B5', 'Length (mm)')
+        sheet.set('C5', 'Quantity')
+        sheet.set('D5', 'Total Length (mm)')
+        sheet.set('E5', 'Total Length (m)')
+        
+        # Write data
+        row = 6
+        grand_total = 0
+        
+        for (timber_type, length), data in sorted(cut_list.items()):
+            type_label = Core.TimberMember.TYPES.get(timber_type, timber_type)
+            sheet.set(f'A{row}', type_label)
+            sheet.set(f'B{row}', str(length))
+            sheet.set(f'C{row}', str(data['count']))
+            sheet.set(f'D{row}', str(round(data['total'])))
+            sheet.set(f'E{row}', f"{data['total']/1000:.2f}")
+            grand_total += data['total']
+            row += 1
+        
+        # Write totals
+        row += 1
+        sheet.set(f'A{row}', 'GRAND TOTAL')
+        sheet.set(f'D{row}', str(round(grand_total)))
+        sheet.set(f'E{row}', f"{grand_total/1000:.2f}")
+        
+        doc.recompute()
+        
+        # Show message with summary
+        QtGui.QMessageBox.information(
+            None,
+            "Cut List Generated",
+            f"Cut list created in spreadsheet '{sheet_name}'.\n\n"
+            f"Total pieces: {len(all_members)}\n"
+            f"Total timber length: {grand_total/1000:.2f} m"
+        )
+
+
+class SettingsCommand:
+    """Command to open settings dialog."""
+    
+    def GetResources(self):
+        return {
+            'MenuText': "Settings",
+            'ToolTip': "Configure default timber frame settings",
+            'Pixmap': "",
+        }
+    
+    def IsActive(self):
+        return True
+    
+    def Activated(self):
+        settings = Core.TimberSettings()
+        dialog = TimberFrameSettingsDialog(settings)
+        
+        if dialog.exec_() == QtGui.QDialog.Accepted:
+            settings = dialog.save_settings()
+            QtGui.QMessageBox.information(
+                None,
+                "Settings",
+                "Settings will be used for next wall conversion.\n\n"
+                "Note: Settings are not yet persisted between sessions."
+            )
+
+
+# Register commands
+FreeCADGui.addCommand('TimberFrame_ConvertWall', ConvertWallCommand())
+FreeCADGui.addCommand('TimberFrame_EditFrame', EditFrameCommand())
+FreeCADGui.addCommand('TimberFrame_RebuildFrame', RebuildFrameCommand())
+FreeCADGui.addCommand('TimberFrame_RegenerateFrame', RegenerateFrameCommand())
+FreeCADGui.addCommand('TimberFrame_GenerateBlueprint', GenerateBlueprintCommand())
+FreeCADGui.addCommand('TimberFrame_GenerateCutList', GenerateCutListCommand())
+FreeCADGui.addCommand('TimberFrame_Settings', SettingsCommand())
