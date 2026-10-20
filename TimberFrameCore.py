@@ -1240,6 +1240,248 @@ def extract_slab_data(slab_obj):
     }
 
 
+# -------------------------------------------------------------------------
+# Floor framing calculator (step 3): rim joists + end joists + joists.
+# Openings (trimmers + headers + tail joists) are a step-4 concern.
+# -------------------------------------------------------------------------
+
+class FloorFrameCalculator:
+    """Lay out the timber members for a rectangular floor platform.
+
+    Everything is produced in slab-local coordinates:
+      - local +X runs along the long side (joists span the short side);
+      - local +Y runs along the short side;
+      - local Z=0 is the slab's TOP face; the frame sits below.
+
+    Member Z extents (all negative, measured from the top of the slab):
+      joists:    [z=-joist_depth .. z=0]
+      rim joists are joists aligned with the long edges (full-length) and
+      end joists are joists at local X=0 and X=length (span the full width).
+
+    joist orientation / dimensions (in slab-local frame):
+      length = extent along local Y (span)
+      width  = joist_width  (local X)
+      depth  = joist_depth  (local Z)
+
+    This mirrors the "horizontal" plates in the wall calculator, laid on
+    their narrow face.
+    """
+
+    def __init__(self, length, width, settings=None):
+        """length = slab-local X span, width = slab-local Y span."""
+        self.length = length
+        self.width = width
+        self.settings = settings or TimberSettings()
+        self.openings = []     # step 4 will consume these
+        self.members = []
+
+    def add_opening(self, opening):
+        self.openings.append(opening)
+
+    def calculate(self):
+        self.members = []
+        s = self.settings
+
+        jw = s.joist_width
+        jd = s.joist_depth
+
+        # 1. Rim joists along the two LONG edges (local Y = 0 and Y = width).
+        # They run the full length of the slab, their width is along local Y
+        # (= jw) and their length is along local X.
+        if s.floor_rim_board:
+            # near rim (Y = 0 .. jw)
+            self.members.append(TimberMember(
+                'rim_joist',
+                x=0, y=0, z=-jd,
+                length=self.length,
+                width=jw,     # local Y extent
+                depth=jd,     # local Z extent
+                orientation='floor_long',
+            ))
+            # far rim (Y = width - jw .. width)
+            self.members.append(TimberMember(
+                'rim_joist',
+                x=0, y=self.width - jw, z=-jd,
+                length=self.length,
+                width=jw,
+                depth=jd,
+                orientation='floor_long',
+            ))
+
+        # 2. Joists along local Y, placed at joist_spacing centres along X.
+        #    The first and last joist are flush with the slab's short edges
+        #    (end joists) and span the full width.
+        #
+        #    Y extent of the "field": sits BETWEEN the two rim joists so
+        #    joists don't overlap them, otherwise it spans the whole width.
+        if s.floor_rim_board:
+            y_start = jw
+            span = self.width - 2 * jw
+        else:
+            y_start = 0.0
+            span = self.width
+
+        if span <= 0:
+            FreeCAD.Console.PrintWarning(
+                "FloorFrameCalculator: slab is too narrow for rim joists + "
+                "joists (span <= 0). Skipping field joists.\n"
+            )
+            return self.members
+
+        joist_positions = self._joist_x_positions()
+        for x in joist_positions:
+            self.members.append(TimberMember(
+                'joist',
+                x=x - jw / 2.0, y=y_start, z=-jd,
+                length=span,
+                width=jw,      # local X extent
+                depth=jd,      # local Z extent
+                orientation='floor_short',
+            ))
+
+        return self.members
+
+    def _joist_x_positions(self):
+        """Centrelines of joists along local X."""
+        s = self.settings
+        jw = s.joist_width
+        spacing = s.joist_spacing
+
+        positions = []
+        # Start joist flush with the slab's low-X edge (acts as end joist).
+        positions.append(jw / 2.0)
+
+        x = spacing
+        while x < self.length - jw:
+            positions.append(x)
+            x += spacing
+
+        end_pos = self.length - jw / 2.0
+        if positions and end_pos - positions[-1] > jw:
+            positions.append(end_pos)
+
+        return positions
+
+
+# -------------------------------------------------------------------------
+# Floor geometry builder - turn FloorFrameCalculator members into solids
+# and place them under the slab in world space.
+# -------------------------------------------------------------------------
+
+def _apply_slab_appearance(view_object, member_type):
+    """Give floor members their own colour so they are visually distinct
+    from the wall framing timber."""
+    try:
+        colors = {
+            'joist':           (0.70, 0.52, 0.33),  # medium wood
+            'rim_joist':       (0.60, 0.42, 0.26),  # darker wood
+            'floor_trimmer':   (0.60, 0.42, 0.26),
+            'floor_header':    (0.52, 0.36, 0.22),
+            'tail_joist':      (0.70, 0.52, 0.33),
+            'floor_blocking':  (0.78, 0.62, 0.44),
+            'floor_sheathing': (0.86, 0.72, 0.47),
+        }
+        color = colors.get(member_type, (0.70, 0.52, 0.33))
+        view_object.ShapeColor = color
+        view_object.LineColor = (color[0] * 0.6, color[1] * 0.6, color[2] * 0.6)
+        view_object.Transparency = 0
+        view_object.LineWidth = 1.0
+    except Exception as e:
+        FreeCAD.Console.PrintWarning(
+            f"Could not apply slab appearance: {e}\n"
+        )
+
+
+def _build_floor_box(member, origin, x_axis, y_axis, top_z):
+    """Build the solid for one floor member in world space.
+
+    All members are axis-aligned boxes in slab-local coords. We build the
+    local box, then transform its corner into world coords by composing
+    (origin + x_axis * local_x + y_axis * local_y + Z * local_z).
+
+    Returns a Part.Shape (Solid).
+    """
+    import Part
+
+    # Local extents based on orientation.
+    if member.orientation == 'floor_long':
+        # Rim joist: length along local X, width along local Y, depth in Z.
+        lx = member.length
+        ly = member.width
+    elif member.orientation == 'floor_short':
+        # Joist: width along local X, length along local Y.
+        lx = member.width
+        ly = member.length
+    else:
+        lx = member.width
+        ly = member.length
+
+    lz = member.depth
+
+    # 8 corners in local coordinates (lower-left-bottom = (x, y, z)).
+    local_corners = [
+        (member.x,      member.y,      member.z),
+        (member.x + lx, member.y,      member.z),
+        (member.x + lx, member.y + ly, member.z),
+        (member.x,      member.y + ly, member.z),
+    ]
+
+    def _to_world(lx_, ly_, lz_):
+        p = FreeCAD.Vector(
+            origin.x + x_axis.x * lx_ + y_axis.x * ly_,
+            origin.y + x_axis.y * lx_ + y_axis.y * ly_,
+            top_z + lz_,
+        )
+        return p
+
+    base = [_to_world(c[0], c[1], c[2]) for c in local_corners]
+    bottom_wire = Part.makePolygon(base + [base[0]])
+    bottom_face = Part.Face(bottom_wire)
+    # Extrude upward (in slab-local +Z, which is world +Z for axis-aligned
+    # slabs; the floor plane is horizontal in all current cases).
+    return bottom_face.extrude(FreeCAD.Vector(0, 0, lz))
+
+
+def create_floor_frame_group(doc, slab_obj, members, slab_data, settings,
+                             group_name=None):
+    """Create a document group containing one Part::Feature per floor member."""
+    if group_name is None:
+        group_name = f"Frame_{slab_obj.Label}"
+
+    group = doc.addObject("App::DocumentObjectGroup", group_name)
+
+    origin = slab_data['origin']
+    x_axis = slab_data['x_axis']
+    y_axis = slab_data['y_axis']
+    top_z = slab_data['top_z']
+
+    for member in members:
+        try:
+            shape = _build_floor_box(member, origin, x_axis, y_axis, top_z)
+        except Exception as e:
+            FreeCAD.Console.PrintError(
+                f"Failed to build shape for {member}: {e}\n"
+            )
+            continue
+
+        part_obj = doc.addObject("Part::Feature", member.get_label())
+        part_obj.Shape = shape
+
+        part_obj.addProperty("App::PropertyString", "TimberType",
+                             "Timber", "Type of timber member")
+        part_obj.TimberType = member.member_type
+        part_obj.addProperty("App::PropertyFloat", "TimberLength",
+                             "Timber", "Length of timber piece")
+        part_obj.TimberLength = member.length
+
+        if part_obj.ViewObject:
+            _apply_slab_appearance(part_obj.ViewObject, member.member_type)
+
+        group.addObject(part_obj)
+
+    return group
+
+
 def _extract_opening_from_bim_object(obj, wall_obj):
     """Extract opening data from a BIM window or door object using bounding boxes."""
     try:

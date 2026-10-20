@@ -301,14 +301,40 @@ def _tag_frame_group(group, wall, settings):
         )
 
 
+def _tag_floor_frame_group(group, slab, settings):
+    """Attach SourceSlab + settings metadata so the floor frame can be
+    regenerated the same way wall frames are."""
+    import json
+    try:
+        if not hasattr(group, 'SourceSlab'):
+            group.addProperty(
+                "App::PropertyLink", "SourceSlab", "TimberFrame",
+                "Source BIM slab this floor frame was generated from"
+            )
+        group.SourceSlab = slab
+
+        if not hasattr(group, 'TimberSettingsJSON'):
+            group.addProperty(
+                "App::PropertyString", "TimberSettingsJSON", "TimberFrame",
+                "Settings used to generate this frame (JSON)"
+            )
+        group.TimberSettingsJSON = json.dumps(settings.to_dict())
+    except Exception as e:
+        FreeCAD.Console.PrintWarning(
+            f"Could not tag floor frame group '{group.Label}': {e}\n"
+        )
+
+
 def _frame_groups_with_source(doc):
-    """Return every frame group that has a SourceWall link (i.e. that we
-    know how to regenerate)."""
+    """Return every frame group that has a SourceWall OR SourceSlab link
+    (i.e. that we know how to regenerate)."""
     out = []
     for obj in doc.Objects:
-        if (obj.Label.startswith("Frame_")
-                and hasattr(obj, 'SourceWall')
-                and obj.SourceWall is not None):
+        if not obj.Label.startswith("Frame_"):
+            continue
+        if (hasattr(obj, 'SourceWall') and obj.SourceWall is not None):
+            out.append(obj)
+        elif (hasattr(obj, 'SourceSlab') and obj.SourceSlab is not None):
             out.append(obj)
     return out
 
@@ -338,12 +364,19 @@ def _delete_frame_group_recursive(doc, group):
 
 
 class ConvertWallCommand:
-    """Command to convert a BIM wall to timber frame."""
-    
+    """Command to convert BIM objects (walls, slabs) to timber frame.
+
+    Despite the historical class name it now accepts BIM Walls AND Slabs
+    in the same selection and dispatches each to the right converter.
+    Floor framing requires floor_enabled=True in settings.
+    """
+
     def GetResources(self):
         return {
-            'MenuText': "Convert Wall to Frame",
-            'ToolTip': "Convert selected BIM wall(s) to timber frame structure",
+            'MenuText': "Convert BIM Object to Frame",
+            'ToolTip': (
+                "Convert selected BIM wall(s) and/or slab(s) to timber frame"
+            ),
             'Pixmap': self._get_icon('convert_wall.svg'),
         }
     
@@ -365,48 +398,114 @@ class ConvertWallCommand:
         """Execute the command."""
         doc = FreeCAD.ActiveDocument
         selection = FreeCADGui.Selection.getSelection()
-        
+
         if not selection:
-            QtGui.QMessageBox.warning(None, "No Selection", "Please select one or more walls to convert.")
+            QtGui.QMessageBox.warning(
+                None, "No Selection",
+                "Please select one or more BIM objects (walls or slabs) to convert."
+            )
             return
-        
-        # Filter to walls only
+
+        # Partition the selection into walls and slabs.
         walls = []
+        slabs = []
         for obj in selection:
-            # Check if it's a wall (Arch::Wall or similar)
+            if Core.is_slab(obj):
+                slabs.append(obj)
+                continue
+            # Wall detection (unchanged from before).
             if hasattr(obj, 'IfcType') and 'wall' in str(obj.IfcType).lower():
                 walls.append(obj)
             elif hasattr(obj, 'Proxy') and hasattr(obj.Proxy, '__class__'):
                 if 'Wall' in obj.Proxy.__class__.__name__:
                     walls.append(obj)
-            elif 'Wall' in obj.TypeId or (hasattr(obj, 'Height') and hasattr(obj, 'Length') and hasattr(obj, 'Width')):
+            elif 'Wall' in obj.TypeId or (
+                hasattr(obj, 'Height')
+                and hasattr(obj, 'Length')
+                and hasattr(obj, 'Width')
+                and not Core.is_slab(obj)
+            ):
                 walls.append(obj)
-        
-        if not walls:
-            QtGui.QMessageBox.warning(None, "No Walls", "No wall objects found in selection.\nPlease select BIM/Arch walls.")
+
+        if not walls and not slabs:
+            QtGui.QMessageBox.warning(
+                None, "No Supported Objects",
+                "No BIM wall or slab was found in the selection.\n"
+                "Select Arch Walls or Arch Slabs."
+            )
             return
-        
-        # Show settings dialog
+
+        # Show settings dialog once (shared between walls and slabs).
         settings = Core.TimberSettings()
         dialog = TimberFrameSettingsDialog(settings)
-        
         if dialog.exec_() != QtGui.QDialog.Accepted:
             return
-        
         settings = dialog.save_settings()
-        
-        # Process each wall
-        doc.openTransaction("Convert Walls to Timber Frame")
+
+        if slabs and not settings.floor_enabled:
+            QtGui.QMessageBox.information(
+                None, "Floor framing disabled",
+                "Enable 'Floor (Base-to-Frame)' in the settings dialog "
+                "to convert slabs. The wall(s) in the selection, if any, "
+                "will still be converted."
+            )
+
+        doc.openTransaction("Convert BIM Objects to Timber Frame")
         try:
             for wall in walls:
                 self._convert_wall(doc, wall, settings)
+            if settings.floor_enabled:
+                for slab in slabs:
+                    self._convert_slab(doc, slab, settings)
             doc.commitTransaction()
             doc.recompute()
-            FreeCAD.Console.PrintMessage(f"Converted {len(walls)} wall(s) to timber frame.\n")
+            FreeCAD.Console.PrintMessage(
+                f"Converted {len(walls)} wall(s)"
+                + (f" and {len(slabs)} slab(s)"
+                   if slabs and settings.floor_enabled else "")
+                + " to timber frame.\n"
+            )
         except Exception as e:
             doc.abortTransaction()
-            FreeCAD.Console.PrintError(f"Error converting walls: {e}\n")
-            QtGui.QMessageBox.critical(None, "Error", f"Failed to convert walls:\n{str(e)}")
+            import traceback
+            FreeCAD.Console.PrintError(
+                f"Error converting objects: {e}\n{traceback.format_exc()}"
+            )
+            QtGui.QMessageBox.critical(
+                None, "Error", f"Failed to convert selection:\n{str(e)}"
+            )
+
+    def _convert_slab(self, doc, slab, settings):
+        """Convert a BIM Slab to a timber floor frame (step 3: rims+joists)."""
+        slab_data = Core.extract_slab_data(slab)
+        FreeCAD.Console.PrintMessage(
+            f"Converting slab '{slab.Label}': "
+            f"{slab_data['length']:.0f} x {slab_data['width']:.0f} mm, "
+            f"{len(slab_data['openings'])} opening(s)\n"
+        )
+
+        calc = Core.FloorFrameCalculator(
+            slab_data['length'], slab_data['width'], settings
+        )
+        for op in slab_data['openings']:
+            calc.add_opening(op)
+        members = calc.calculate()
+        FreeCAD.Console.PrintMessage(
+            f"  Generated {len(members)} floor member(s)\n"
+        )
+
+        group = Core.create_floor_frame_group(
+            doc, slab, members, slab_data, settings
+        )
+        _tag_floor_frame_group(group, slab, settings)
+
+        try:
+            if slab.ViewObject is not None:
+                slab.ViewObject.Visibility = False
+        except Exception:
+            pass
+
+        return group
     
     def _convert_wall(self, doc, wall, settings):
         """Convert a single wall to timber frame."""
@@ -816,10 +915,12 @@ class RegenerateFrameCommand:
 
     def GetResources(self):
         return {
-            'MenuText': "Regenerate Frame from Wall",
+            'MenuText': "Regenerate Frame",
             'ToolTip': (
-                "Rebuild the selected timber frame from its source BIM wall. "
-                "Picks up changes to the wall's Align / Height / Width / openings."
+                "Rebuild the selected timber frame from its source BIM "
+                "wall or slab. Picks up changes to properties "
+                "(Align / Height / openings for walls, Length / Width / "
+                "openings for slabs)."
             ),
             'Pixmap': "",
         }
@@ -862,10 +963,12 @@ class RegenerateFrameCommand:
         doc.openTransaction("Regenerate Timber Frame")
         try:
             for group in targets:
-                wall = group.SourceWall
-                if wall is None:
+                wall = getattr(group, 'SourceWall', None)
+                slab = getattr(group, 'SourceSlab', None)
+                if wall is None and slab is None:
                     FreeCAD.Console.PrintWarning(
-                        f"'{group.Label}' has no SourceWall - skipped.\n"
+                        f"'{group.Label}' has no SourceWall/SourceSlab - "
+                        "skipped.\n"
                     )
                     continue
 
@@ -882,23 +985,33 @@ class RegenerateFrameCommand:
                             f"'{group.Label}' ({e}); using defaults.\n"
                         )
 
-                # Clean up: delete this frame group and any FrameSketch
-                # that was created alongside it (single-segment path only).
-                sketch_label = f"FrameSketch_{wall.Label}"
-                for obj in list(doc.Objects):
-                    if obj.Label == sketch_label:
-                        try:
-                            doc.removeObject(obj.Name)
-                        except Exception:
-                            pass
-                _delete_frame_group_recursive(doc, group)
-
-                # Re-run the exact same conversion.
-                ConvertWallCommand()._convert_wall(doc, wall, settings)
-                FreeCAD.Console.PrintMessage(
-                    f"Regenerated frame for '{wall.Label}' "
-                    f"(Align={getattr(wall, 'Align', 'Left')}).\n"
-                )
+                if wall is not None:
+                    # Clean up: delete this frame group and any FrameSketch
+                    # that was created alongside it (single-segment path).
+                    sketch_label = f"FrameSketch_{wall.Label}"
+                    for obj in list(doc.Objects):
+                        if obj.Label == sketch_label:
+                            try:
+                                doc.removeObject(obj.Name)
+                            except Exception:
+                                pass
+                    _delete_frame_group_recursive(doc, group)
+                    ConvertWallCommand()._convert_wall(doc, wall, settings)
+                    FreeCAD.Console.PrintMessage(
+                        f"Regenerated wall frame for '{wall.Label}' "
+                        f"(Align={getattr(wall, 'Align', 'Left')}).\n"
+                    )
+                else:
+                    # Slab-based floor frame.
+                    _delete_frame_group_recursive(doc, group)
+                    # Force floor framing on regenerate even if the user
+                    # had it disabled when the dialog opened, since the
+                    # existing frame proves it was requested at least once.
+                    settings.floor_enabled = True
+                    ConvertWallCommand()._convert_slab(doc, slab, settings)
+                    FreeCAD.Console.PrintMessage(
+                        f"Regenerated floor frame for '{slab.Label}'.\n"
+                    )
 
             doc.commitTransaction()
             doc.recompute()
