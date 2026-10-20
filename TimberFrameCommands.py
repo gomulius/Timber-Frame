@@ -1004,10 +1004,66 @@ class GenerateBlueprintCommand:
             FreeCAD.Console.PrintWarning("No timber objects found in group\n")
             return
         
+        # Pick the view direction so the wall is seen in elevation (its
+        # longest horizontal dimension lies flat across the page).
+        #
+        # The previous version hard-coded Direction = (0, -1, 0), which is
+        # correct only for walls running along X. A wall running along Y
+        # then appeared edge-on (just the stud thickness visible). We now
+        # look at the combined bounding box of the frame and choose:
+        #   - longest horizontal dim along X  -> Direction = (0, -1, 0)
+        #                                         XAxis     = (1, 0, 0)
+        #   - longest horizontal dim along Y  -> Direction = (-1, 0, 0)
+        #                                         XAxis     = (0, 1, 0)
+        import Part
+        try:
+            combined = timber_objects[0].Shape
+            for o in timber_objects[1:]:
+                combined = combined.fuse(o.Shape)
+            bb = combined.BoundBox
+        except Exception:
+            # Fuse can be slow / fragile on many parts; fall back to the
+            # per-shape bbox union.
+            bb = timber_objects[0].Shape.BoundBox.__class__()
+            bb.setVoid()
+            for o in timber_objects:
+                bb.add(o.Shape.BoundBox)
+
+        dx = bb.XMax - bb.XMin
+        dy = bb.YMax - bb.YMin
+
+        if dy > dx:
+            # Wall runs along Y - look along +X (so Y increases to the right
+            # on the page, which is what reading an elevation expects).
+            view_direction = FreeCAD.Vector(-1, 0, 0)
+            x_direction = FreeCAD.Vector(0, 1, 0)
+        else:
+            view_direction = FreeCAD.Vector(0, -1, 0)
+            x_direction = FreeCAD.Vector(1, 0, 0)
+
+        FreeCAD.Console.PrintMessage(
+            f"Blueprint for {frame_group.Label}: "
+            f"BBox dx={dx:.0f} dy={dy:.0f} -> "
+            f"direction={tuple(view_direction)} x_axis={tuple(x_direction)}\n"
+        )
+
         # Create front view (elevation)
-        front_view = doc.addObject("TechDraw::DrawViewPart", f"FrontView_{frame_group.Label}")
+        front_view = doc.addObject(
+            "TechDraw::DrawViewPart", f"FrontView_{frame_group.Label}"
+        )
         front_view.Source = timber_objects
-        front_view.Direction = FreeCAD.Vector(0, -1, 0)  # Looking from front
+        front_view.Direction = view_direction
+        # XDirection controls which world axis maps to the page's +X. Some
+        # FreeCAD builds expose this as 'XDirection' on DrawViewPart; guard
+        # the assignment to stay compatible with older versions.
+        try:
+            front_view.XDirection = x_direction
+        except Exception:
+            try:
+                front_view.setExpression('XDirection', None)
+                front_view.XDirection = x_direction
+            except Exception:
+                pass
         front_view.Scale = 0.02  # 1:50 scale
         front_view.X = 150
         front_view.Y = 200
