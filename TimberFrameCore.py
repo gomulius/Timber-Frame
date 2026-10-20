@@ -984,6 +984,262 @@ def extract_wall_data(wall_obj):
     }
 
 
+# =========================================================================
+# Base-to-Frame (Floor)  -  step 2: slab outline extraction only.
+# =========================================================================
+
+class SlabOpening:
+    """A hole in a floor slab (stair / chimney / duct).
+
+    Carries the opening rectangle in slab-local XY coordinates, with X
+    along the slab's longer dimension and Y along the shorter one. These
+    are the same conventions the floor framing geometry builder will
+    expect in step 3.
+    """
+
+    def __init__(self, x, y, width, length, label=''):
+        self.x = x            # slab-local X of lower-left corner (mm)
+        self.y = y            # slab-local Y of lower-left corner (mm)
+        self.width = width    # extent along slab-local X (mm)
+        self.length = length  # extent along slab-local Y (mm)
+        self.label = label
+
+    def __repr__(self):
+        return (
+            f"SlabOpening({self.label!r}, "
+            f"x={self.x:.0f}, y={self.y:.0f}, "
+            f"w={self.width:.0f}, L={self.length:.0f})"
+        )
+
+
+def _slab_top_face(slab_obj):
+    """Return the top horizontal face of a slab, or None.
+
+    "Top" = face whose normal has +Z component close to 1. We pick the
+    largest such face so a chamfered or stepped slab still yields the
+    main deck plane.
+    """
+    best = None
+    best_area = 0.0
+    for face in slab_obj.Shape.Faces:
+        try:
+            uv = face.Surface.parameter(face.CenterOfMass)
+            n = face.normalAt(uv[0], uv[1])
+            if n.z > 0.9 and face.Area > best_area:
+                best = face
+                best_area = face.Area
+        except Exception:
+            continue
+    return best
+
+
+def _slab_local_basis(slab_obj, top_face):
+    """Compute slab-local axes from the top face's oriented bounding rectangle.
+
+    Returns a tuple (origin, x_axis, y_axis, length, width) where:
+      - origin is a world Vector at the lower-left of the OBB (slab-local
+        (0, 0));
+      - x_axis / y_axis are unit Vectors in world coords aligned with the
+        longer and shorter OBB edges respectively;
+      - length is the extent along x_axis (longer side, mm);
+      - width  is the extent along y_axis (shorter side, mm).
+
+    For the rectangular case this is unambiguous. For non-rectangular
+    outlines we take the oriented bounding box of the top-face vertices
+    projected onto the slab's own horizontal plane - which gives a
+    tight-enough bounding rectangle to lay out joists along the long
+    axis. Non-rectangular clipping is a step-5 concern.
+    """
+    # Collect top-face outer-wire vertices in world coords, projected to
+    # the top face's Z plane.
+    pts = [v.Point for v in top_face.OuterWire.Vertexes]
+    if len(pts) < 3:
+        return None
+
+    # Use the top face's bounding box as the rectangular approximation for
+    # step 2. (A full oriented-bbox would need PCA; the plan tags that as
+    # a step-5 concern and we don't need it for axis-aligned slabs.)
+    xs = [p.x for p in pts]
+    ys = [p.y for p in pts]
+    z = sum(p.z for p in pts) / len(pts)
+    x_min, x_max = min(xs), max(xs)
+    y_min, y_max = min(ys), max(ys)
+    dx = x_max - x_min
+    dy = y_max - y_min
+
+    # X axis = long side so joists span the shorter direction by default.
+    if dx >= dy:
+        length = dx
+        width = dy
+        origin = FreeCAD.Vector(x_min, y_min, z)
+        x_axis = FreeCAD.Vector(1, 0, 0)
+        y_axis = FreeCAD.Vector(0, 1, 0)
+    else:
+        length = dy
+        width = dx
+        origin = FreeCAD.Vector(x_min, y_min, z)
+        # Rotate the local frame 90 degrees so x_axis is the long side.
+        x_axis = FreeCAD.Vector(0, 1, 0)
+        y_axis = FreeCAD.Vector(-1, 0, 0)
+        # Origin must be the lower-left in the rotated frame. With the
+        # 90-deg rotation above, local (0,0) is at world (x_min, y_min)
+        # as well, because y_axis points to -X. Shift x_min so that the
+        # local X axis sweeps the slab from (x_min, y_min) to
+        # (x_min, y_max). That is already the case; no shift needed.
+
+    return origin, x_axis, y_axis, length, width
+
+
+def _world_to_slab_local(point, origin, x_axis, y_axis):
+    """Project a world point into the slab's local 2D frame."""
+    d = FreeCAD.Vector(point.x - origin.x, point.y - origin.y, 0)
+    return d.dot(x_axis), d.dot(y_axis)
+
+
+def _extract_slab_opening_from_object(obj, origin, x_axis, y_axis):
+    """Build a SlabOpening in slab-local coords from a hosted/subtracted object.
+
+    Any object whose shape intersects the slab top plane and that is NOT a
+    structural element (Wall / Roof / Slab / Floor) is treated as a hole.
+    """
+    try:
+        obj_class = type(obj).__name__
+        if obj_class in ('Roof', 'ArchRoof', 'Slab', 'ArchSlab',
+                         'Floor', 'ArchFloor', 'Wall', 'ArchWall'):
+            return None
+
+        bb = obj.Shape.BoundBox
+        corners = [
+            FreeCAD.Vector(bb.XMin, bb.YMin, 0),
+            FreeCAD.Vector(bb.XMax, bb.YMin, 0),
+            FreeCAD.Vector(bb.XMax, bb.YMax, 0),
+            FreeCAD.Vector(bb.XMin, bb.YMax, 0),
+        ]
+        locals_ = [
+            _world_to_slab_local(c, origin, x_axis, y_axis) for c in corners
+        ]
+        xs = [p[0] for p in locals_]
+        ys = [p[1] for p in locals_]
+        return SlabOpening(
+            x=min(xs), y=min(ys),
+            width=max(xs) - min(xs),
+            length=max(ys) - min(ys),
+            label=str(getattr(obj, 'Label', '')),
+        )
+    except Exception as e:
+        FreeCAD.Console.PrintWarning(
+            f"Could not extract slab opening from {getattr(obj, 'Label', '?')}: {e}\n"
+        )
+        return None
+
+
+def is_slab(obj):
+    """Return True if obj looks like a BIM/Arch floor slab."""
+    try:
+        if type(obj).__name__ in ('Slab', 'ArchSlab', 'Floor', 'ArchFloor'):
+            return True
+        ifc = str(getattr(obj, 'IfcType', '')).lower()
+        if ifc in ('ifcslab', 'slab', 'ifcfloor', 'floor'):
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def extract_slab_data(slab_obj):
+    """Extract the data needed to build a floor frame from a BIM Slab.
+
+    Returns a dict with:
+      - 'length': extent along the slab's local long axis (mm)
+      - 'width':  extent along the slab's local short axis (mm)
+      - 'thickness': slab vertical thickness (mm), best-effort
+      - 'origin': world Vector at slab-local (0, 0, top-face-Z)
+      - 'x_axis': unit world Vector for slab-local +X (long side)
+      - 'y_axis': unit world Vector for slab-local +Y (short side)
+      - 'top_z':  world Z of the slab's top face
+      - 'placement': slab_obj.Placement (for reference)
+      - 'openings': list[SlabOpening] in slab-local coordinates
+
+    For non-rectangular slabs this is a tight axis-aligned bounding
+    rectangle (good enough for step 2). Step 5 will clip joists against
+    the actual outer wire for L / polygon shapes.
+    """
+    top_face = _slab_top_face(slab_obj)
+    if top_face is None:
+        raise RuntimeError(
+            f"Slab {slab_obj.Label!r}: no horizontal top face found. "
+            "Expected a face with normal close to +Z."
+        )
+
+    basis = _slab_local_basis(slab_obj, top_face)
+    if basis is None:
+        raise RuntimeError(
+            f"Slab {slab_obj.Label!r}: top face has fewer than 3 vertices "
+            "- cannot determine local axes."
+        )
+    origin, x_axis, y_axis, length, width = basis
+
+    # Slab thickness: prefer explicit property, else infer from bbox.
+    thickness = None
+    for prop in ('Thickness', 'Height'):
+        val = getattr(slab_obj, prop, None)
+        if val is not None:
+            try:
+                thickness = float(val)
+                if thickness > 0:
+                    break
+            except Exception:
+                pass
+    if not thickness or thickness <= 0:
+        bb = slab_obj.Shape.BoundBox
+        thickness = bb.ZMax - bb.ZMin
+
+    # Openings: subtractions + hosted non-structural objects whose bbox
+    # overlaps the top face region.
+    openings = []
+    seen = set()
+
+    if hasattr(slab_obj, 'Subtractions') and slab_obj.Subtractions:
+        for sub in slab_obj.Subtractions:
+            if sub.Name in seen:
+                continue
+            seen.add(sub.Name)
+            op = _extract_slab_opening_from_object(sub, origin, x_axis, y_axis)
+            if op is not None:
+                openings.append(op)
+
+    doc = slab_obj.Document
+    for obj in doc.Objects:
+        if obj.Name in seen:
+            continue
+        hosts = getattr(obj, 'Hosts', None)
+        is_hosted = False
+        if hosts:
+            host_list = hosts if isinstance(hosts, (list, tuple)) else [hosts]
+            if slab_obj in host_list:
+                is_hosted = True
+        elif getattr(obj, 'Host', None) == slab_obj:
+            is_hosted = True
+        if not is_hosted:
+            continue
+        seen.add(obj.Name)
+        op = _extract_slab_opening_from_object(obj, origin, x_axis, y_axis)
+        if op is not None:
+            openings.append(op)
+
+    return {
+        'length': length,
+        'width': width,
+        'thickness': thickness,
+        'origin': origin,
+        'x_axis': x_axis,
+        'y_axis': y_axis,
+        'top_z': origin.z,
+        'placement': slab_obj.Placement,
+        'openings': openings,
+    }
+
+
 def _extract_opening_from_bim_object(obj, wall_obj):
     """Extract opening data from a BIM window or door object using bounding boxes."""
     try:
