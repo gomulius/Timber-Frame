@@ -1068,24 +1068,24 @@ def _slab_local_basis(slab_obj, top_face):
     dy = y_max - y_min
 
     # X axis = long side so joists span the shorter direction by default.
+    # The local frame must be right-handed (y_axis = Z x x_axis) AND land
+    # on the slab, which pins the origin to a specific corner.
     if dx >= dy:
         length = dx
         width = dy
-        origin = FreeCAD.Vector(x_min, y_min, z)
         x_axis = FreeCAD.Vector(1, 0, 0)
-        y_axis = FreeCAD.Vector(0, 1, 0)
+        y_axis = FreeCAD.Vector(0, 1, 0)      # right-handed, +Y into slab
+        origin = FreeCAD.Vector(x_min, y_min, z)
     else:
         length = dy
         width = dx
-        origin = FreeCAD.Vector(x_min, y_min, z)
-        # Rotate the local frame 90 degrees so x_axis is the long side.
-        x_axis = FreeCAD.Vector(0, 1, 0)
-        y_axis = FreeCAD.Vector(-1, 0, 0)
-        # Origin must be the lower-left in the rotated frame. With the
-        # 90-deg rotation above, local (0,0) is at world (x_min, y_min)
-        # as well, because y_axis points to -X. Shift x_min so that the
-        # local X axis sweeps the slab from (x_min, y_min) to
-        # (x_min, y_max). That is already the case; no shift needed.
+        x_axis = FreeCAD.Vector(0, 1, 0)      # local X along world +Y
+        y_axis = FreeCAD.Vector(-1, 0, 0)     # right-handed, points to -X
+        # Because local +Y points to world -X, local (0, 0) must be at
+        # the slab's HIGH-X corner so local Y increasing sweeps INTO the
+        # slab (toward low X). Using x_min here was the earlier bug: the
+        # frame landed on the wrong side of the slab.
+        origin = FreeCAD.Vector(x_max, y_min, z)
 
     return origin, x_axis, y_axis, length, width
 
