@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- Solid slab at the bottom (seen edge-on, same grey as the wall icon) -->
+  <rect x="6" y="50" width="52" height="8" fill="#808080" stroke="#404040" stroke-width="2"/>
+
+  <!-- Up-arrow in the middle to echo the wall icon's conversion arrow -->
+  <polygon points="32,46 26,40 29,40 29,32 35,32 35,40 38,40"
+           fill="#4CAF50"/>
+
+  <!-- Timber floor frame at the top (rims + joists, seen in plan view) -->
+  <g>
+    <!-- Rim joists (long edges, horizontal in the icon) -->
+    <rect x="6" y="6"  width="52" height="4" fill="#DEB887" stroke="#8B4513" stroke-width="1"/>
+    <rect x="6" y="26" width="52" height="4" fill="#DEB887" stroke="#8B4513" stroke-width="1"/>
+    <!-- Joists (vertical in the icon, running between the rims) -->
+    <rect x="10" y="10" width="3" height="16" fill="#DEB887" stroke="#8B4513" stroke-width="1"/>
+    <rect x="19" y="10" width="3" height="16" fill="#DEB887" stroke="#8B4513" stroke-width="1"/>
+    <rect x="28" y="10" width="3" height="16" fill="#DEB887" stroke="#8B4513" stroke-width="1"/>
+    <rect x="37" y="10" width="3" height="16" fill="#DEB887" stroke="#8B4513" stroke-width="1"/>
+    <rect x="46" y="10" width="3" height="16" fill="#DEB887" stroke="#8B4513" stroke-width="1"/>
+    <rect x="51" y="10" width="3" height="16" fill="#DEB887" stroke="#8B4513" stroke-width="1"/>
+  </g>
+</svg>

@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- Classic gear icon -->
+  <g transform="translate(32,32)" fill="#607D8B" stroke="#263238" stroke-width="1.5">
+    <!-- 8 teeth as rounded rectangles rotated around the centre -->
+    <g>
+      <rect x="-4" y="-28" width="8" height="12" rx="2"/>
+      <rect x="-4" y="-28" width="8" height="12" rx="2" transform="rotate(45)"/>
+      <rect x="-4" y="-28" width="8" height="12" rx="2" transform="rotate(90)"/>
+      <rect x="-4" y="-28" width="8" height="12" rx="2" transform="rotate(135)"/>
+      <rect x="-4" y="-28" width="8" height="12" rx="2" transform="rotate(180)"/>
+      <rect x="-4" y="-28" width="8" height="12" rx="2" transform="rotate(225)"/>
+      <rect x="-4" y="-28" width="8" height="12" rx="2" transform="rotate(270)"/>
+      <rect x="-4" y="-28" width="8" height="12" rx="2" transform="rotate(315)"/>
+    </g>
+    <!-- Gear body -->
+    <circle r="16" fill="#607D8B"/>
+    <!-- Centre hole -->
+    <circle r="6" fill="#FFFFFF"/>
+  </g>
+</svg>

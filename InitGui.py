@@ -26,6 +26,7 @@ class TimberFrameWorkbench(FreeCADGui.Workbench):
         # List of commands
         self.commands = [
             "TimberFrame_ConvertWall",
+            "TimberFrame_ConvertSlab",
             "TimberFrame_RegenerateFrame",
             "TimberFrame_EditFrame",
             "TimberFrame_RebuildFrame",

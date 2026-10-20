@@ -276,6 +276,17 @@ class TimberFrameSettingsDialog(QtGui.QDialog):
         return s
 
 
+def _icon_path(name):
+    """Return the absolute path to an SVG icon, or '' if it doesn't exist.
+
+    FreeCAD accepts an empty Pixmap and falls back to the default command
+    icon; returning '' instead of a broken path avoids runtime warnings.
+    """
+    base = os.path.dirname(os.path.abspath(__file__))
+    full = os.path.join(base, "Resources", "icons", name)
+    return full if os.path.exists(full) else ""
+
+
 def _tag_frame_group(group, wall, settings):
     """Attach SourceWall + settings metadata to a frame group so that the
     Regenerate command can later rebuild it from the (possibly modified)
@@ -364,56 +375,35 @@ def _delete_frame_group_recursive(doc, group):
 
 
 class ConvertWallCommand:
-    """Command to convert BIM objects (walls, slabs) to timber frame.
-
-    Despite the historical class name it now accepts BIM Walls AND Slabs
-    in the same selection and dispatches each to the right converter.
-    Floor framing requires floor_enabled=True in settings.
-    """
+    """Convert selected BIM wall(s) to a timber stud frame."""
 
     def GetResources(self):
         return {
-            'MenuText': "Convert BIM Object to Frame",
-            'ToolTip': (
-                "Convert selected BIM wall(s) and/or slab(s) to timber frame"
-            ),
-            'Pixmap': self._get_icon('convert_wall.svg'),
+            'MenuText': "Convert Wall to Frame",
+            'ToolTip': "Convert selected BIM wall(s) to timber stud frame",
+            'Pixmap': _icon_path('convert_wall.svg'),
         }
-    
-    def _get_icon(self, name):
-        workbench_path = os.path.join(FreeCAD.getUserAppDataDir(), "Mod", "TimberFrame")
-        icon_path = os.path.join(workbench_path, "Resources", "icons", name)
-        if os.path.exists(icon_path):
-            return icon_path
-        return ""
-    
+
     def IsActive(self):
-        """Command is active when walls are selected."""
         if FreeCAD.ActiveDocument is None:
             return False
-        sel = FreeCADGui.Selection.getSelection()
-        return len(sel) > 0
-    
+        return len(FreeCADGui.Selection.getSelection()) > 0
+
     def Activated(self):
-        """Execute the command."""
         doc = FreeCAD.ActiveDocument
         selection = FreeCADGui.Selection.getSelection()
 
         if not selection:
             QtGui.QMessageBox.warning(
                 None, "No Selection",
-                "Please select one or more BIM objects (walls or slabs) to convert."
+                "Please select one or more BIM walls to convert."
             )
             return
 
-        # Partition the selection into walls and slabs.
         walls = []
-        slabs = []
         for obj in selection:
             if Core.is_slab(obj):
-                slabs.append(obj)
-                continue
-            # Wall detection (unchanged from before).
+                continue  # slabs go through Convert Slab to Frame
             if hasattr(obj, 'IfcType') and 'wall' in str(obj.IfcType).lower():
                 walls.append(obj)
             elif hasattr(obj, 'Proxy') and hasattr(obj.Proxy, '__class__'):
@@ -423,56 +413,40 @@ class ConvertWallCommand:
                 hasattr(obj, 'Height')
                 and hasattr(obj, 'Length')
                 and hasattr(obj, 'Width')
-                and not Core.is_slab(obj)
             ):
                 walls.append(obj)
 
-        if not walls and not slabs:
+        if not walls:
             QtGui.QMessageBox.warning(
-                None, "No Supported Objects",
-                "No BIM wall or slab was found in the selection.\n"
-                "Select Arch Walls or Arch Slabs."
+                None, "No Walls",
+                "No BIM wall was found in the selection.\n"
+                "Use 'Convert Slab to Frame' for floor slabs."
             )
             return
 
-        # Show settings dialog once (shared between walls and slabs).
         settings = Core.TimberSettings()
         dialog = TimberFrameSettingsDialog(settings)
         if dialog.exec_() != QtGui.QDialog.Accepted:
             return
         settings = dialog.save_settings()
 
-        if slabs and not settings.floor_enabled:
-            QtGui.QMessageBox.information(
-                None, "Floor framing disabled",
-                "Enable 'Floor (Base-to-Frame)' in the settings dialog "
-                "to convert slabs. The wall(s) in the selection, if any, "
-                "will still be converted."
-            )
-
-        doc.openTransaction("Convert BIM Objects to Timber Frame")
+        doc.openTransaction("Convert Walls to Timber Frame")
         try:
             for wall in walls:
                 self._convert_wall(doc, wall, settings)
-            if settings.floor_enabled:
-                for slab in slabs:
-                    self._convert_slab(doc, slab, settings)
             doc.commitTransaction()
             doc.recompute()
             FreeCAD.Console.PrintMessage(
-                f"Converted {len(walls)} wall(s)"
-                + (f" and {len(slabs)} slab(s)"
-                   if slabs and settings.floor_enabled else "")
-                + " to timber frame.\n"
+                f"Converted {len(walls)} wall(s) to timber frame.\n"
             )
         except Exception as e:
             doc.abortTransaction()
             import traceback
             FreeCAD.Console.PrintError(
-                f"Error converting objects: {e}\n{traceback.format_exc()}"
+                f"Error converting walls: {e}\n{traceback.format_exc()}"
             )
             QtGui.QMessageBox.critical(
-                None, "Error", f"Failed to convert selection:\n{str(e)}"
+                None, "Error", f"Failed to convert walls:\n{str(e)}"
             )
 
     def _convert_slab(self, doc, slab, settings):
@@ -793,6 +767,69 @@ class ConvertWallCommand:
         return parent_group
 
 
+class ConvertSlabCommand:
+    """Convert selected BIM slab(s) to a timber floor platform."""
+
+    def GetResources(self):
+        return {
+            'MenuText': "Convert Slab to Frame",
+            'ToolTip': (
+                "Convert the selected BIM floor slab(s) to a timber "
+                "floor platform (rim joists + joists)"
+            ),
+            'Pixmap': _icon_path('convert_slab.svg'),
+        }
+
+    def IsActive(self):
+        if FreeCAD.ActiveDocument is None:
+            return False
+        return len(FreeCADGui.Selection.getSelection()) > 0
+
+    def Activated(self):
+        doc = FreeCAD.ActiveDocument
+        selection = FreeCADGui.Selection.getSelection()
+        slabs = [o for o in selection if Core.is_slab(o)]
+
+        if not slabs:
+            QtGui.QMessageBox.warning(
+                None, "No Slabs",
+                "No BIM slab (Arch Slab / Floor) was found in the "
+                "selection.\nSelect one or more slabs and try again."
+            )
+            return
+
+        settings = Core.TimberSettings()
+        # Floor framing is the whole point of this command - force it on.
+        settings.floor_enabled = True
+        dialog = TimberFrameSettingsDialog(settings)
+        if dialog.exec_() != QtGui.QDialog.Accepted:
+            return
+        settings = dialog.save_settings()
+        settings.floor_enabled = True  # user may have un-ticked; override
+
+        doc.openTransaction("Convert Slabs to Timber Floor Frame")
+        try:
+            # Reuse the slab converter method that lives on ConvertWallCommand
+            # (kept there to keep step-3's single-dispatch path symmetric).
+            dispatcher = ConvertWallCommand()
+            for slab in slabs:
+                dispatcher._convert_slab(doc, slab, settings)
+            doc.commitTransaction()
+            doc.recompute()
+            FreeCAD.Console.PrintMessage(
+                f"Converted {len(slabs)} slab(s) to timber floor frame.\n"
+            )
+        except Exception as e:
+            doc.abortTransaction()
+            import traceback
+            FreeCAD.Console.PrintError(
+                f"Error converting slabs: {e}\n{traceback.format_exc()}"
+            )
+            QtGui.QMessageBox.critical(
+                None, "Error", f"Failed to convert slabs:\n{str(e)}"
+            )
+
+
 class EditFrameCommand:
     """Command to edit a timber frame using sketcher."""
     
@@ -800,7 +837,7 @@ class EditFrameCommand:
         return {
             'MenuText': "Edit Frame Layout",
             'ToolTip': "Edit timber frame stud positions using Sketcher",
-            'Pixmap': "",
+            'Pixmap': _icon_path('edit_frame.svg'),
         }
     
     def IsActive(self):
@@ -858,7 +895,7 @@ class RebuildFrameCommand:
         return {
             'MenuText': "Rebuild Frame from Sketch",
             'ToolTip': "Regenerate 3D frame from edited sketch",
-            'Pixmap': "",
+            'Pixmap': _icon_path('rebuild_frame.svg'),
         }
     
     def IsActive(self):
@@ -922,7 +959,7 @@ class RegenerateFrameCommand:
                 "(Align / Height / openings for walls, Length / Width / "
                 "openings for slabs)."
             ),
-            'Pixmap': "",
+            'Pixmap': _icon_path('regenerate_frame.svg'),
         }
 
     def IsActive(self):
@@ -1033,7 +1070,7 @@ class GenerateBlueprintCommand:
         return {
             'MenuText': "Generate Blueprint",
             'ToolTip': "Generate 2D blueprint drawings with dimensions",
-            'Pixmap': "",
+            'Pixmap': _icon_path('blueprint.svg'),
         }
     
     def IsActive(self):
@@ -1208,7 +1245,7 @@ class GenerateCutListCommand:
         return {
             'MenuText': "Generate Cut List",
             'ToolTip': "Generate material cut list with quantities",
-            'Pixmap': "",
+            'Pixmap': _icon_path('cut_list.svg'),
         }
     
     def IsActive(self):
@@ -1311,7 +1348,7 @@ class SettingsCommand:
         return {
             'MenuText': "Settings",
             'ToolTip': "Configure default timber frame settings",
-            'Pixmap': "",
+            'Pixmap': _icon_path('settings.svg'),
         }
     
     def IsActive(self):
@@ -1333,6 +1370,7 @@ class SettingsCommand:
 
 # Register commands
 FreeCADGui.addCommand('TimberFrame_ConvertWall', ConvertWallCommand())
+FreeCADGui.addCommand('TimberFrame_ConvertSlab', ConvertSlabCommand())
 FreeCADGui.addCommand('TimberFrame_EditFrame', EditFrameCommand())
 FreeCADGui.addCommand('TimberFrame_RebuildFrame', RebuildFrameCommand())
 FreeCADGui.addCommand('TimberFrame_RegenerateFrame', RegenerateFrameCommand())
