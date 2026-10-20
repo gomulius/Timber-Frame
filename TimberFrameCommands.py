@@ -1163,28 +1163,44 @@ class GenerateBlueprintCommand:
 
         dx = bb.XMax - bb.XMin
         dy = bb.YMax - bb.YMin
+        dz = bb.ZMax - bb.ZMin
 
         # TechDraw derives the view's paper-up axis as
         # paper_up = Direction x XDirection
-        # so to keep world +Z pointing to the top of the page we need
-        # Direction x XDirection = (0, 0, +1).
+        # To keep world +Z pointing to the top of the page for
+        # elevations (and world +Y for plans), the (Direction,
+        # XDirection) pair must cross to the desired page-up.
         #
-        #   Wall along X:   Direction=(0,-1,0)  XDir=(1,0,0)  -> up=(0,0,1)  ✓
-        #   Wall along Y:   Direction=(+1,0,0)  XDir=(0,1,0)  -> up=(0,0,1)  ✓
-        #
-        # The previous Y-aligned combination (-1,0,0) + (0,1,0) gave
-        # up = (0,0,-1) -> blueprint was flipped vertically.
-        if dy > dx:
+        # Decide view type from the bounding-box aspect:
+        #   - FLAT frame (floor): dz << min(dx, dy) -> PLAN from above
+        #   - WALL / ROOF        : upright -> ELEVATION along the
+        #                                     shorter horizontal axis
+        is_floor_like = (dz > 0 and dz * 3 < dx and dz * 3 < dy)
+
+        if is_floor_like:
+            # Plan view: look straight down. World +Y is page up.
+            # paper_up = (0,0,-1) x (1,0,0) = (0,1,0)
+            view_direction = FreeCAD.Vector(0, 0, -1)
+            x_direction = FreeCAD.Vector(1, 0, 0)
+            view_type = 'PLAN'
+        elif dy > dx:
+            # Elevation along world +X.
+            # paper_up = (1,0,0) x (0,1,0) = (0,0,1) - Z is up on page.
             view_direction = FreeCAD.Vector(1, 0, 0)
             x_direction = FreeCAD.Vector(0, 1, 0)
+            view_type = 'ELEVATION (Y-aligned)'
         else:
+            # Elevation along world -Y.
+            # paper_up = (0,-1,0) x (1,0,0) = (0,0,1) - Z is up on page.
             view_direction = FreeCAD.Vector(0, -1, 0)
             x_direction = FreeCAD.Vector(1, 0, 0)
+            view_type = 'ELEVATION (X-aligned)'
 
         FreeCAD.Console.PrintMessage(
             f"Blueprint for {frame_group.Label}: "
-            f"BBox dx={dx:.0f} dy={dy:.0f} -> "
-            f"direction={tuple(view_direction)} x_axis={tuple(x_direction)}\n"
+            f"BBox dx={dx:.0f} dy={dy:.0f} dz={dz:.0f} -> "
+            f"{view_type}  direction={tuple(view_direction)} "
+            f"x_axis={tuple(x_direction)}\n"
         )
 
         # Create front view (elevation)
