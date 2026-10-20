@@ -1032,10 +1032,18 @@ class GenerateBlueprintCommand:
         dx = bb.XMax - bb.XMin
         dy = bb.YMax - bb.YMin
 
+        # TechDraw derives the view's paper-up axis as
+        # paper_up = Direction x XDirection
+        # so to keep world +Z pointing to the top of the page we need
+        # Direction x XDirection = (0, 0, +1).
+        #
+        #   Wall along X:   Direction=(0,-1,0)  XDir=(1,0,0)  -> up=(0,0,1)  ✓
+        #   Wall along Y:   Direction=(+1,0,0)  XDir=(0,1,0)  -> up=(0,0,1)  ✓
+        #
+        # The previous Y-aligned combination (-1,0,0) + (0,1,0) gave
+        # up = (0,0,-1) -> blueprint was flipped vertically.
         if dy > dx:
-            # Wall runs along Y - look along +X (so Y increases to the right
-            # on the page, which is what reading an elevation expects).
-            view_direction = FreeCAD.Vector(-1, 0, 0)
+            view_direction = FreeCAD.Vector(1, 0, 0)
             x_direction = FreeCAD.Vector(0, 1, 0)
         else:
             view_direction = FreeCAD.Vector(0, -1, 0)
