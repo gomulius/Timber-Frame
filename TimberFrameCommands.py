@@ -12,204 +12,133 @@ except ImportError:
     import TimberFrameCore as Core
 
 
-class TimberFrameSettingsDialog(QtGui.QDialog):
-    """Dialog for configuring timber frame settings."""
-    
+class _BaseSettingsDialog(QtGui.QDialog):
+    """Common infrastructure for the dedicated wall / floor dialogs.
+
+    Each subclass must implement:
+      - build_content(layout)  : populate the scroll area body
+      - load_settings()        : copy self.settings -> UI widgets
+      - save_settings()        : copy UI widgets -> self.settings (returns settings)
+    """
+
+    WINDOW_TITLE = "Timber Frame Settings"
+
     def __init__(self, settings=None, parent=None):
         super().__init__(parent)
         self.settings = settings or Core.TimberSettings()
-        self.setup_ui()
+        self._setup_ui()
         self.load_settings()
-    
-    def setup_ui(self):
-        self.setWindowTitle("Timber Frame Settings")
+
+    def _setup_ui(self):
+        self.setWindowTitle(self.WINDOW_TITLE)
         self.setMinimumWidth(440)
-        self.resize(460, 760)
+        self.resize(460, 640)
 
-        outer_layout = QtGui.QVBoxLayout(self)
-
-        # Scroll area so the dialog stays usable as we add more features
-        # (floor, roof, siding, ...). Buttons stay fixed below the scroll.
+        outer = QtGui.QVBoxLayout(self)
         scroll = QtGui.QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QtGui.QFrame.NoFrame)
-        outer_layout.addWidget(scroll, 1)
+        outer.addWidget(scroll, 1)
 
         content = QtGui.QWidget()
         scroll.setWidget(content)
-        layout = QtGui.QVBoxLayout(content)
+        self._content_layout = QtGui.QVBoxLayout(content)
+        self.build_content(self._content_layout)
 
-        # Timber Dimensions Group
-        timber_group = QtGui.QGroupBox("Timber Dimensions")
-        timber_layout = QtGui.QFormLayout(timber_group)
-        
-        self.stud_width_spin = self._create_length_spinbox(20, 100, 45)
-        timber_layout.addRow("Stud Width:", self.stud_width_spin)
-        
-        self.stud_depth_spin = self._create_length_spinbox(50, 300, 145)
-        timber_layout.addRow("Stud Depth:", self.stud_depth_spin)
-        
-        layout.addWidget(timber_group)
-        
-        # Plates Group
-        plates_group = QtGui.QGroupBox("Plates")
-        plates_layout = QtGui.QFormLayout(plates_group)
-        
-        self.bottom_plate_spin = QtGui.QSpinBox()
-        self.bottom_plate_spin.setRange(1, 3)
-        self.bottom_plate_spin.setValue(1)
-        plates_layout.addRow("Bottom Plates:", self.bottom_plate_spin)
-        
-        self.top_plate_spin = QtGui.QSpinBox()
-        self.top_plate_spin.setRange(1, 3)
-        self.top_plate_spin.setValue(2)
-        plates_layout.addRow("Top Plates:", self.top_plate_spin)
-        
-        layout.addWidget(plates_group)
-        
-        # Spacing Group
-        spacing_group = QtGui.QGroupBox("Stud Spacing")
-        spacing_layout = QtGui.QFormLayout(spacing_group)
-        
-        self.stud_spacing_spin = self._create_length_spinbox(200, 800, 500)
-        spacing_layout.addRow("Stud Spacing (center-to-center):", self.stud_spacing_spin)
-        
-        layout.addWidget(spacing_group)
-        
-        # Opening Framing Group
-        opening_group = QtGui.QGroupBox("Opening Framing")
-        opening_layout = QtGui.QFormLayout(opening_group)
-        
-        self.header_depth_spin = self._create_length_spinbox(100, 400, 200)
-        opening_layout.addRow("Header Depth (height):", self.header_depth_spin)
-        
-        # Info label about header sizing
-        header_info = QtGui.QLabel("Typical: 1m span→90mm, 1.5m→135mm, 2m→180mm")
-        header_info.setStyleSheet("color: gray; font-size: 10px;")
-        opening_layout.addRow("", header_info)
-        
-        self.rough_gap_spin = self._create_length_spinbox(5, 50, 10)
-        opening_layout.addRow("Rough Opening Gap:", self.rough_gap_spin)
-        
-        self.king_stud_check = QtGui.QCheckBox("King Studs")
-        self.king_stud_check.setChecked(True)
-        opening_layout.addRow("", self.king_stud_check)
-        
-        self.jack_stud_check = QtGui.QCheckBox("Jack Studs")
-        self.jack_stud_check.setChecked(True)
-        opening_layout.addRow("", self.jack_stud_check)
-        
-        self.cripple_check = QtGui.QCheckBox("Cripple Studs")
-        self.cripple_check.setChecked(True)
-        opening_layout.addRow("", self.cripple_check)
-        
-        layout.addWidget(opening_group)
-        
-        # Header Timber Group
-        header_group = QtGui.QGroupBox("Header Timber (Lintels)")
-        header_layout = QtGui.QFormLayout(header_group)
-        
-        self.header_same_check = QtGui.QCheckBox("Use same timber as studs")
-        self.header_same_check.setChecked(True)
-        self.header_same_check.stateChanged.connect(self._toggle_header_options)
-        header_layout.addRow("", self.header_same_check)
-        
-        self.header_width_spin = self._create_length_spinbox(20, 200, 45)
-        self.header_width_spin.setEnabled(False)
-        header_layout.addRow("Header Width:", self.header_width_spin)
-        
-        self.header_timber_depth_spin = self._create_length_spinbox(50, 400, 145)
-        self.header_timber_depth_spin.setEnabled(False)
-        header_layout.addRow("Header Depth (into wall):", self.header_timber_depth_spin)
-        
-        layout.addWidget(header_group)
-
-        # ---------------- Floor (Base-to-Frame) ----------------
-        floor_group = QtGui.QGroupBox("Floor (Base-to-Frame) - experimental")
-        floor_layout = QtGui.QFormLayout(floor_group)
-
-        self.floor_enabled_check = QtGui.QCheckBox(
-            "Enable floor framing when converting a BIM Slab"
-        )
-        self.floor_enabled_check.setChecked(False)
-        self.floor_enabled_check.stateChanged.connect(self._toggle_floor_options)
-        floor_layout.addRow("", self.floor_enabled_check)
-
-        floor_info = QtGui.QLabel(
-            "Note: slab conversion is not yet wired up. These settings are "
-            "persisted now so they can be picked up as soon as the geometry "
-            "step lands."
-        )
-        floor_info.setStyleSheet("color: gray; font-size: 10px;")
-        floor_info.setWordWrap(True)
-        floor_layout.addRow("", floor_info)
-
-        self.joist_width_spin = self._create_length_spinbox(20, 150, 45)
-        floor_layout.addRow("Joist Width:", self.joist_width_spin)
-
-        self.joist_depth_spin = self._create_length_spinbox(100, 400, 220)
-        floor_layout.addRow("Joist Depth:", self.joist_depth_spin)
-
-        self.joist_spacing_spin = self._create_length_spinbox(200, 800, 400)
-        floor_layout.addRow("Joist Spacing:", self.joist_spacing_spin)
-
-        self.floor_rim_check = QtGui.QCheckBox("Add perimeter rim joists")
-        self.floor_rim_check.setChecked(True)
-        floor_layout.addRow("", self.floor_rim_check)
-
-        self.floor_direction_combo = QtGui.QComboBox()
-        self.floor_direction_combo.addItems(["auto (short span)", "X", "Y"])
-        floor_layout.addRow("Joist Direction:", self.floor_direction_combo)
-
-        self.floor_sheathing_spin = self._create_length_spinbox(0, 50, 22)
-        self.floor_sheathing_spin.setSpecialValueText("off")
-        floor_layout.addRow("Sheathing Thickness:", self.floor_sheathing_spin)
-
-        self.floor_blocking_spin = self._create_length_spinbox(0, 3000, 0)
-        self.floor_blocking_spin.setSpecialValueText("off")
-        floor_layout.addRow("Blocking Every:", self.floor_blocking_spin)
-
-        layout.addWidget(floor_group)
-
-        self._floor_option_widgets = [
-            self.joist_width_spin, self.joist_depth_spin,
-            self.joist_spacing_spin, self.floor_rim_check,
-            self.floor_direction_combo, self.floor_sheathing_spin,
-            self.floor_blocking_spin,
-        ]
-        self._toggle_floor_options(QtCore.Qt.Unchecked)
-
-        # Buttons (fixed - outside the scroll area)
-        button_box = QtGui.QDialogButtonBox(
+        buttons = QtGui.QDialogButtonBox(
             QtGui.QDialogButtonBox.Ok | QtGui.QDialogButtonBox.Cancel
         )
-        button_box.accepted.connect(self.accept)
-        button_box.rejected.connect(self.reject)
-        outer_layout.addWidget(button_box)
-    
-    def _toggle_header_options(self, state):
-        """Enable/disable header dimension inputs based on checkbox."""
-        enabled = state != QtCore.Qt.Checked
-        self.header_width_spin.setEnabled(enabled)
-        self.header_timber_depth_spin.setEnabled(enabled)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        outer.addWidget(buttons)
 
-    def _toggle_floor_options(self, state):
-        """Grey out all Floor option widgets unless the enable checkbox is on."""
-        enabled = state == QtCore.Qt.Checked
-        for w in getattr(self, '_floor_option_widgets', ()):
-            w.setEnabled(enabled)
-    
     def _create_length_spinbox(self, min_val, max_val, default):
-        """Create a spinbox for length input (in mm)."""
         spin = QtGui.QDoubleSpinBox()
         spin.setRange(min_val, max_val)
         spin.setValue(default)
         spin.setSuffix(" mm")
         spin.setDecimals(1)
         return spin
-    
+
+
+class WallSettingsDialog(_BaseSettingsDialog):
+    """Settings dialog shown when converting WALLS to timber frames.
+
+    Only exposes wall-relevant controls. Floor-related fields on the
+    TimberSettings object are left untouched.
+    """
+
+    WINDOW_TITLE = "Wall Framing Settings"
+
+    def build_content(self, layout):
+        g = QtGui.QGroupBox("Timber Dimensions")
+        f = QtGui.QFormLayout(g)
+        self.stud_width_spin = self._create_length_spinbox(20, 100, 45)
+        f.addRow("Stud Width:", self.stud_width_spin)
+        self.stud_depth_spin = self._create_length_spinbox(50, 300, 145)
+        f.addRow("Stud Depth:", self.stud_depth_spin)
+        layout.addWidget(g)
+
+        g = QtGui.QGroupBox("Plates")
+        f = QtGui.QFormLayout(g)
+        self.bottom_plate_spin = QtGui.QSpinBox()
+        self.bottom_plate_spin.setRange(1, 3)
+        self.bottom_plate_spin.setValue(1)
+        f.addRow("Bottom Plates:", self.bottom_plate_spin)
+        self.top_plate_spin = QtGui.QSpinBox()
+        self.top_plate_spin.setRange(1, 3)
+        self.top_plate_spin.setValue(2)
+        f.addRow("Top Plates:", self.top_plate_spin)
+        layout.addWidget(g)
+
+        g = QtGui.QGroupBox("Stud Spacing")
+        f = QtGui.QFormLayout(g)
+        self.stud_spacing_spin = self._create_length_spinbox(200, 800, 500)
+        f.addRow("Stud Spacing (center-to-center):", self.stud_spacing_spin)
+        layout.addWidget(g)
+
+        g = QtGui.QGroupBox("Opening Framing")
+        f = QtGui.QFormLayout(g)
+        self.header_depth_spin = self._create_length_spinbox(100, 400, 200)
+        f.addRow("Header Depth (height):", self.header_depth_spin)
+        header_info = QtGui.QLabel(
+            "Typical: 1m span -> 90mm, 1.5m -> 135mm, 2m -> 180mm"
+        )
+        header_info.setStyleSheet("color: gray; font-size: 10px;")
+        f.addRow("", header_info)
+        self.rough_gap_spin = self._create_length_spinbox(5, 50, 10)
+        f.addRow("Rough Opening Gap:", self.rough_gap_spin)
+        self.king_stud_check = QtGui.QCheckBox("King Studs")
+        self.king_stud_check.setChecked(True)
+        f.addRow("", self.king_stud_check)
+        self.jack_stud_check = QtGui.QCheckBox("Jack Studs")
+        self.jack_stud_check.setChecked(True)
+        f.addRow("", self.jack_stud_check)
+        self.cripple_check = QtGui.QCheckBox("Cripple Studs")
+        self.cripple_check.setChecked(True)
+        f.addRow("", self.cripple_check)
+        layout.addWidget(g)
+
+        g = QtGui.QGroupBox("Header Timber (Lintels)")
+        f = QtGui.QFormLayout(g)
+        self.header_same_check = QtGui.QCheckBox("Use same timber as studs")
+        self.header_same_check.setChecked(True)
+        self.header_same_check.stateChanged.connect(self._toggle_header_options)
+        f.addRow("", self.header_same_check)
+        self.header_width_spin = self._create_length_spinbox(20, 200, 45)
+        self.header_width_spin.setEnabled(False)
+        f.addRow("Header Width:", self.header_width_spin)
+        self.header_timber_depth_spin = self._create_length_spinbox(50, 400, 145)
+        self.header_timber_depth_spin.setEnabled(False)
+        f.addRow("Header Depth (into wall):", self.header_timber_depth_spin)
+        layout.addWidget(g)
+
+    def _toggle_header_options(self, state):
+        enabled = state != QtCore.Qt.Checked
+        self.header_width_spin.setEnabled(enabled)
+        self.header_timber_depth_spin.setEnabled(enabled)
+
     def load_settings(self):
-        """Load current settings into UI."""
         s = self.settings
         self.stud_width_spin.setValue(s.stud_width)
         self.stud_depth_spin.setValue(s.stud_depth)
@@ -221,30 +150,14 @@ class TimberFrameSettingsDialog(QtGui.QDialog):
         self.king_stud_check.setChecked(s.king_stud_enabled)
         self.jack_stud_check.setChecked(s.jack_stud_enabled)
         self.cripple_check.setChecked(s.cripple_stud_enabled)
-        # Header timber settings
         self.header_same_check.setChecked(s.header_use_same_timber)
         self.header_width_spin.setValue(s.header_width)
         self.header_timber_depth_spin.setValue(s.header_timber_depth)
-        self._toggle_header_options(QtCore.Qt.Checked if s.header_use_same_timber else QtCore.Qt.Unchecked)
-
-        # Floor settings
-        self.floor_enabled_check.setChecked(s.floor_enabled)
-        self.joist_width_spin.setValue(s.joist_width)
-        self.joist_depth_spin.setValue(s.joist_depth)
-        self.joist_spacing_spin.setValue(s.joist_spacing)
-        self.floor_rim_check.setChecked(s.floor_rim_board)
-        dir_index = {'auto': 0, 'X': 1, 'Y': 2}.get(
-            getattr(s, 'floor_deck_direction', 'auto'), 0
-        )
-        self.floor_direction_combo.setCurrentIndex(dir_index)
-        self.floor_sheathing_spin.setValue(s.floor_sheathing_thickness)
-        self.floor_blocking_spin.setValue(s.floor_blocking_every)
-        self._toggle_floor_options(
-            QtCore.Qt.Checked if s.floor_enabled else QtCore.Qt.Unchecked
+        self._toggle_header_options(
+            QtCore.Qt.Checked if s.header_use_same_timber else QtCore.Qt.Unchecked
         )
 
     def save_settings(self):
-        """Save UI values to settings."""
         s = self.settings
         s.stud_width = self.stud_width_spin.value()
         s.stud_depth = self.stud_depth_spin.value()
@@ -256,24 +169,95 @@ class TimberFrameSettingsDialog(QtGui.QDialog):
         s.king_stud_enabled = self.king_stud_check.isChecked()
         s.jack_stud_enabled = self.jack_stud_check.isChecked()
         s.cripple_stud_enabled = self.cripple_check.isChecked()
-        # Header timber settings
         s.header_use_same_timber = self.header_same_check.isChecked()
         s.header_width = self.header_width_spin.value()
         s.header_timber_depth = self.header_timber_depth_spin.value()
+        return s
 
-        # Floor settings
-        s.floor_enabled = self.floor_enabled_check.isChecked()
+
+class FloorSettingsDialog(_BaseSettingsDialog):
+    """Settings dialog shown when converting SLABS to floor platforms.
+
+    Only exposes floor-relevant controls. Wall-related fields on the
+    TimberSettings object are left untouched. The floor_enabled flag is
+    forced ON on save - this dialog is only reached from the Convert Slab
+    command, so running it is a positive consent.
+    """
+
+    WINDOW_TITLE = "Floor (Base) Framing Settings"
+
+    def build_content(self, layout):
+        info = QtGui.QLabel(
+            "Floor platform under a BIM Slab. Joists span the slab's "
+            "shorter dimension by default."
+        )
+        info.setWordWrap(True)
+        info.setStyleSheet("color: gray; font-size: 10px;")
+        layout.addWidget(info)
+
+        g = QtGui.QGroupBox("Joists")
+        f = QtGui.QFormLayout(g)
+        self.joist_width_spin = self._create_length_spinbox(20, 150, 45)
+        f.addRow("Joist Width:", self.joist_width_spin)
+        self.joist_depth_spin = self._create_length_spinbox(100, 400, 220)
+        f.addRow("Joist Depth:", self.joist_depth_spin)
+        self.joist_spacing_spin = self._create_length_spinbox(200, 800, 400)
+        f.addRow("Joist Spacing:", self.joist_spacing_spin)
+        self.floor_direction_combo = QtGui.QComboBox()
+        self.floor_direction_combo.addItems(
+            ["auto (short span)", "X", "Y"]
+        )
+        f.addRow("Joist Direction:", self.floor_direction_combo)
+        layout.addWidget(g)
+
+        g = QtGui.QGroupBox("Perimeter")
+        f = QtGui.QFormLayout(g)
+        self.floor_rim_check = QtGui.QCheckBox("Add perimeter rim joists")
+        self.floor_rim_check.setChecked(True)
+        f.addRow("", self.floor_rim_check)
+        layout.addWidget(g)
+
+        g = QtGui.QGroupBox("Deck / Blocking")
+        f = QtGui.QFormLayout(g)
+        self.floor_sheathing_spin = self._create_length_spinbox(0, 50, 22)
+        self.floor_sheathing_spin.setSpecialValueText("off")
+        f.addRow("Sheathing Thickness:", self.floor_sheathing_spin)
+        self.floor_blocking_spin = self._create_length_spinbox(0, 3000, 0)
+        self.floor_blocking_spin.setSpecialValueText("off")
+        f.addRow("Blocking Every:", self.floor_blocking_spin)
+        layout.addWidget(g)
+
+    def load_settings(self):
+        s = self.settings
+        self.joist_width_spin.setValue(s.joist_width)
+        self.joist_depth_spin.setValue(s.joist_depth)
+        self.joist_spacing_spin.setValue(s.joist_spacing)
+        dir_index = {'auto': 0, 'X': 1, 'Y': 2}.get(
+            getattr(s, 'floor_deck_direction', 'auto'), 0
+        )
+        self.floor_direction_combo.setCurrentIndex(dir_index)
+        self.floor_rim_check.setChecked(s.floor_rim_board)
+        self.floor_sheathing_spin.setValue(s.floor_sheathing_thickness)
+        self.floor_blocking_spin.setValue(s.floor_blocking_every)
+
+    def save_settings(self):
+        s = self.settings
         s.joist_width = self.joist_width_spin.value()
         s.joist_depth = self.joist_depth_spin.value()
         s.joist_spacing = self.joist_spacing_spin.value()
-        s.floor_rim_board = self.floor_rim_check.isChecked()
         s.floor_deck_direction = (
             ['auto', 'X', 'Y'][self.floor_direction_combo.currentIndex()]
         )
+        s.floor_rim_board = self.floor_rim_check.isChecked()
         s.floor_sheathing_thickness = self.floor_sheathing_spin.value()
         s.floor_blocking_every = self.floor_blocking_spin.value()
-
+        s.floor_enabled = True   # running this dialog is positive consent
         return s
+
+
+# Backwards-compat alias: anything that still imports the old name gets the
+# wall dialog, which is the pre-split behaviour for wall conversion.
+TimberFrameSettingsDialog = WallSettingsDialog
 
 
 def _icon_path(name):
@@ -425,7 +409,7 @@ class ConvertWallCommand:
             return
 
         settings = Core.TimberSettings()
-        dialog = TimberFrameSettingsDialog(settings)
+        dialog = WallSettingsDialog(settings)
         if dialog.exec_() != QtGui.QDialog.Accepted:
             return
         settings = dialog.save_settings()
@@ -799,13 +783,11 @@ class ConvertSlabCommand:
             return
 
         settings = Core.TimberSettings()
-        # Floor framing is the whole point of this command - force it on.
-        settings.floor_enabled = True
-        dialog = TimberFrameSettingsDialog(settings)
+        dialog = FloorSettingsDialog(settings)
         if dialog.exec_() != QtGui.QDialog.Accepted:
             return
         settings = dialog.save_settings()
-        settings.floor_enabled = True  # user may have un-ticked; override
+        # FloorSettingsDialog already forces floor_enabled = True on save.
 
         doc.openTransaction("Convert Slabs to Timber Floor Frame")
         try:
@@ -1356,15 +1338,27 @@ class SettingsCommand:
     
     def Activated(self):
         settings = Core.TimberSettings()
-        dialog = TimberFrameSettingsDialog(settings)
-        
+
+        # Simple two-choice launcher so Wall and Floor settings each live in
+        # their own focused dialog instead of being mashed together.
+        choice = QtGui.QInputDialog.getItem(
+            None, "Timber Frame Settings",
+            "Which defaults would you like to edit?",
+            ["Wall framing", "Floor (Base) framing"],
+            0, False,
+        )
+        if not choice[1]:
+            return
+        picked = choice[0]
+
+        dialog_cls = WallSettingsDialog if picked == "Wall framing" else FloorSettingsDialog
+        dialog = dialog_cls(settings)
         if dialog.exec_() == QtGui.QDialog.Accepted:
-            settings = dialog.save_settings()
+            dialog.save_settings()
             QtGui.QMessageBox.information(
-                None,
-                "Settings",
-                "Settings will be used for next wall conversion.\n\n"
-                "Note: Settings are not yet persisted between sessions."
+                None, "Settings",
+                "Settings will be used for the next conversion.\n\n"
+                "Note: these defaults are not yet persisted between sessions."
             )
 
 
