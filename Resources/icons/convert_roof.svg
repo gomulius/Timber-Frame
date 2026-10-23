@@ -1,26 +1,23 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
-  <!-- Original (tilted) roof slab at the bottom, same grey as the other
-       convert_* icons. -->
-  <polygon points="4,56 60,56 58,46 6,50"
+  <!-- Original tilted roof slab at the TOP (source) -->
+  <polygon points="4,16 60,10 58,22 6,20"
            fill="#808080" stroke="#404040" stroke-width="2"/>
 
-  <!-- Green up-arrow echoing the wall/slab icons' conversion arrow. -->
-  <polygon points="32,42 26,36 29,36 29,30 35,30 35,36 38,36"
+  <!-- Down-arrow (roof -> rafter frame) -->
+  <polygon points="29,26 35,26 35,32 38,32 32,38 26,32 29,32"
            fill="#4CAF50"/>
 
-  <!-- Timber rafter frame at the top: a tilted frame with wall plate,
-       ridge plate and several rafters between them. -->
+  <!-- Timber rafter frame at the BOTTOM (result) -->
   <g stroke="#8B4513" stroke-width="1">
-    <!-- Wall plate (lower / longer, flat along the eave) -->
-    <rect x="4" y="26" width="56" height="4" fill="#DEB887"/>
-    <!-- Ridge plate (higher, offset to the right because of slope) -->
-    <rect x="18" y="6"  width="42" height="4" fill="#DEB887"/>
-    <!-- Three rafters linking the two plates, drawn tilted so they
-         suggest a shed-roof slope going up and to the right. -->
-    <polygon points="8,26 12,26 24,10 20,10"  fill="#DEB887"/>
-    <polygon points="22,26 26,26 38,10 34,10" fill="#DEB887"/>
-    <polygon points="36,26 40,26 52,10 48,10" fill="#DEB887"/>
-    <polygon points="50,26 54,26 56,10 52,10" fill="#DEB887"/>
+    <!-- Wall plate (eave side) -->
+    <rect x="4" y="54" width="56" height="4" fill="#DEB887"/>
+    <!-- Ridge plate (high side, shifted because of slope) -->
+    <rect x="18" y="42" width="42" height="4" fill="#DEB887"/>
+    <!-- Rafters linking the plates, tilted so they suggest a shed slope -->
+    <polygon points="8,54 12,54 24,46 20,46"  fill="#DEB887"/>
+    <polygon points="22,54 26,54 38,46 34,46" fill="#DEB887"/>
+    <polygon points="36,54 40,54 52,46 48,46" fill="#DEB887"/>
+    <polygon points="50,54 54,54 56,46 52,46" fill="#DEB887"/>
   </g>
 </svg>
