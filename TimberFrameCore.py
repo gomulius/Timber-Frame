@@ -66,7 +66,9 @@ class TimberSettings:
         self.roof_wall_plate = True     # eave plate on top of outer walls
         self.roof_ridge_plate = True    # ridge plate at the high side
         self.roof_rake_plates = True    # NEW: rake plates on the two gables
-        self.roof_blocking_every = 0.0  # NEW: mm between rows, 0 = none
+        self.roof_batten_every = 0.0    # NEW: mm between tile battens, 0 = none
+        self.roof_batten_width = 40.0   # NEW: mm, batten cross-section
+        self.roof_batten_depth = 25.0   # NEW: mm, batten thickness (air gap)
         self.roof_sheathing_thickness = 18.0   # mm, 0 = no deck
         self.roof_overhang_eave = 0.0   # mm, extends rafters past eave
         self.roof_overhang_rake = 0.0   # mm, extends plates past gables
@@ -110,7 +112,9 @@ class TimberSettings:
             'roof_overhang_eave': self.roof_overhang_eave,
             'roof_overhang_rake': self.roof_overhang_rake,
             'roof_rake_plates': self.roof_rake_plates,
-            'roof_blocking_every': self.roof_blocking_every,
+            'roof_batten_every': self.roof_batten_every,
+            'roof_batten_width': self.roof_batten_width,
+            'roof_batten_depth': self.roof_batten_depth,
             'flat_roof_threshold_deg': self.flat_roof_threshold_deg,
         }
     
@@ -180,7 +184,7 @@ class TimberMember:
         'roof_trimmer': 'Roof Trimmer',
         'roof_header': 'Roof Header',
         'roof_tail_rafter': 'Tail Rafter',
-        'roof_blocking': 'Roof Blocking',
+        'roof_batten': 'Roof Batten',
         'roof_sheathing': 'Roof Sheathing',
     }
     
@@ -1928,7 +1932,7 @@ class RoofFrameCalculator:
     _ORIENT_PLATE = 'roof_plate'           # eave / ridge: lies flat
     _ORIENT_RAFTER = 'roof_rafter'         # rafter: on edge along the slope
     _ORIENT_RAKE_PLATE = 'roof_rake_plate' # rake: lies flat but runs along slope
-    _ORIENT_BLOCKING = 'roof_blocking'     # block between two rafters
+    _ORIENT_BATTEN = 'roof_batten'         # ventilation batten ON TOP of rafters
 
     def __init__(self, pitch, settings=None):
         self.pitch = pitch
@@ -2041,29 +2045,34 @@ class RoofFrameCalculator:
                 orientation=self._ORIENT_RAFTER,
             ))
 
-        # 5. Blocking (optional): short pieces perpendicular to rafters,
-        #    sitting between consecutive rafter pairs at every
-        #    roof_blocking_every along v.
-        if s.roof_blocking_every and s.roof_blocking_every > 0 and len(rafter_us) >= 2:
-            v = v_lo + s.roof_blocking_every
-            while v < v_hi - s.rafter_width:
-                for a, b in zip(rafter_us[:-1], rafter_us[1:]):
-                    bay_lo = a + s.rafter_width / 2.0
-                    bay_hi = b - s.rafter_width / 2.0
-                    bay_len = bay_hi - bay_lo
-                    if bay_len <= 0:
-                        continue
-                    self.members.append(TimberMember(
-                        'roof_blocking',
-                        x=bay_lo,
-                        y=v,
-                        z=0.0,
-                        length=bay_len,         # extent along u (between rafters)
-                        width=s.rafter_width,   # extent along v (into roof)
-                        depth=s.rafter_depth,
-                        orientation=self._ORIENT_BLOCKING,
-                    ))
-                v += s.roof_blocking_every
+        # 5. Battens (optional): tile battens / laty running ACROSS the
+        #    rafters, SITTING ON TOP of them. They create the air gap
+        #    between the roof insulation (below the rafters) and the
+        #    roof tiles / panels (above the battens). They run the full
+        #    length of the eave (u-direction, perpendicular to rafters)
+        #    and are placed at roof_batten_every intervals along the
+        #    slope (v-direction) starting from the eave.
+        if s.roof_batten_every and s.roof_batten_every > 0:
+            bw = s.roof_batten_width
+            bd = s.roof_batten_depth
+            # Full-width span: between the two rake plates if present.
+            batten_u0 = u_lo
+            batten_len = (u_hi - u_lo) if (u_hi > u_lo) else p['eave_length']
+            if u_hi <= u_lo:
+                batten_u0 = 0.0  # fall back to full eave if no rakes
+            v = v_lo + s.roof_batten_every
+            while v < v_hi - bw:
+                self.members.append(TimberMember(
+                    'roof_batten',
+                    x=batten_u0,
+                    y=v,
+                    z=0.0,
+                    length=batten_len,  # extent along u (across rafters)
+                    width=bw,           # extent along v (slope direction)
+                    depth=bd,           # thickness perpendicular to slope
+                    orientation=self._ORIENT_BATTEN,
+                ))
+                v += s.roof_batten_every
 
         return self.members
 
@@ -2098,7 +2107,7 @@ def _apply_roof_appearance(view_object, member_type):
             'wall_plate_roof':  (0.70, 0.52, 0.33),
             'ridge_plate':      (0.70, 0.52, 0.33),
             'rake_plate':       (0.70, 0.52, 0.33),
-            'roof_blocking':    (0.65, 0.46, 0.28),
+            'roof_batten':      (0.78, 0.62, 0.44),
             'roof_sheathing':   (0.86, 0.72, 0.47),
             'roof_trimmer':     (0.60, 0.42, 0.26),
             'roof_header':      (0.52, 0.36, 0.22),
@@ -2191,8 +2200,12 @@ def _build_roof_box(member, pitch):
                            -n.z * member.depth)
         )
 
-    if member.orientation == RoofFrameCalculator._ORIENT_BLOCKING:
-        # Blocking: oriented like a rafter but shorter. Same convention.
+    if member.orientation == RoofFrameCalculator._ORIENT_BATTEN:
+        # Tile batten / counter-batten: SITS ON TOP of the rafters so it
+        # creates the air cushion between insulation (below) and roof
+        # tiles / panels (above). Its BOTTOM face lies on the slope
+        # plane (same as the top of the rafters) and it extrudes OUTWARD
+        # along +n by its thickness.
         p1 = _P(u0, v0)
         p2 = _P(u0 + member.length, v0)
         p3 = _P(u0 + member.length, v0 + member.width)
@@ -2200,9 +2213,9 @@ def _build_roof_box(member, pitch):
         wire = Part.makePolygon([p1, p2, p3, p4, p1])
         face = Part.Face(wire)
         return face.extrude(
-            FreeCAD.Vector(-n.x * member.depth,
-                           -n.y * member.depth,
-                           -n.z * member.depth)
+            FreeCAD.Vector(n.x * member.depth,
+                           n.y * member.depth,
+                           n.z * member.depth)
         )
 
     raise ValueError(

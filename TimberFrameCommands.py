@@ -307,15 +307,20 @@ class RoofSettingsDialog(_BaseSettingsDialog):
         f.addRow("", self.rake_plate_check)
         layout.addWidget(g)
 
-        # Blocking
-        g = QtGui.QGroupBox("Blocking")
+        # Tile battens / counter-battens
+        g = QtGui.QGroupBox("Battens (air gap)")
         f = QtGui.QFormLayout(g)
-        self.roof_blocking_spin = self._create_length_spinbox(0, 3000, 0)
-        self.roof_blocking_spin.setSpecialValueText("off")
-        f.addRow("Blocking Every:", self.roof_blocking_spin)
+        self.roof_batten_spin = self._create_length_spinbox(0, 3000, 0)
+        self.roof_batten_spin.setSpecialValueText("off")
+        f.addRow("Batten Every:", self.roof_batten_spin)
+        self.roof_batten_w_spin = self._create_length_spinbox(20, 100, 40)
+        f.addRow("Batten Width:", self.roof_batten_w_spin)
+        self.roof_batten_d_spin = self._create_length_spinbox(10, 80, 25)
+        f.addRow("Batten Thickness (air gap):", self.roof_batten_d_spin)
         hint = QtGui.QLabel(
-            "Short pieces perpendicular to rafters at the given interval "
-            "along the slope. 0 = no blocking."
+            "Battens run across the rafters and sit ON TOP of them, "
+            "creating the ventilation gap between insulation and roof "
+            "tiles / panels. Set 'Batten Every' = 0 to disable."
         )
         hint.setStyleSheet("color: gray; font-size: 10px;")
         hint.setWordWrap(True)
@@ -369,7 +374,9 @@ class RoofSettingsDialog(_BaseSettingsDialog):
         self.wall_plate_check.setChecked(s.roof_wall_plate)
         self.ridge_plate_check.setChecked(s.roof_ridge_plate)
         self.rake_plate_check.setChecked(s.roof_rake_plates)
-        self.roof_blocking_spin.setValue(s.roof_blocking_every)
+        self.roof_batten_spin.setValue(s.roof_batten_every)
+        self.roof_batten_w_spin.setValue(s.roof_batten_width)
+        self.roof_batten_d_spin.setValue(s.roof_batten_depth)
         self.overhang_eave_spin.setValue(s.roof_overhang_eave)
         self.overhang_rake_spin.setValue(s.roof_overhang_rake)
         self.roof_sheathing_spin.setValue(s.roof_sheathing_thickness)
@@ -383,7 +390,9 @@ class RoofSettingsDialog(_BaseSettingsDialog):
         s.roof_wall_plate = self.wall_plate_check.isChecked()
         s.roof_ridge_plate = self.ridge_plate_check.isChecked()
         s.roof_rake_plates = self.rake_plate_check.isChecked()
-        s.roof_blocking_every = self.roof_blocking_spin.value()
+        s.roof_batten_every = self.roof_batten_spin.value()
+        s.roof_batten_width = self.roof_batten_w_spin.value()
+        s.roof_batten_depth = self.roof_batten_d_spin.value()
         s.roof_overhang_eave = self.overhang_eave_spin.value()
         s.roof_overhang_rake = self.overhang_rake_spin.value()
         s.roof_sheathing_thickness = self.roof_sheathing_spin.value()
