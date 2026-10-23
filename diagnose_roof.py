@@ -95,11 +95,20 @@ else:
             n = n.normalize()
             com = face.CenterOfMass
             # "Up-ish" face: nz > 0, "down-ish": nz < 0, side faces: |nz| ~ 0
-            tag = ("TOP" if n.z > 0.95 else
-                   "BOTTOM" if n.z < -0.95 else
-                   "SLOPED-UP" if n.z > 0.05 else
-                   "SLOPED-DOWN" if n.z < -0.05 else
-                   "SIDE")
+            # Strict horizontal = exactly up/down with zero horizontal
+            # component. Shed roofs with a shallow pitch (e.g. 2 deg) have
+            # faces with |nz| ~ 0.999 so a looser "almost horizontal" tag
+            # would misclassify them. We identify a slope face as any face
+            # with |nz| > 0 AND some horizontal component.
+            horiz = math.sqrt(n.x * n.x + n.y * n.y)
+            if horiz < 1e-4:
+                tag = "TOP" if n.z > 0 else "BOTTOM"
+            elif abs(n.z) < 1e-4:
+                tag = "SIDE"
+            elif n.z > 0:
+                tag = f"SLOPED-UP ({math.degrees(math.atan2(horiz, abs(n.z))):.1f} deg)"
+            else:
+                tag = f"SLOPED-DOWN ({math.degrees(math.atan2(horiz, abs(n.z))):.1f} deg)"
             print(f"  face[{i:2d}] A={face.Area:>12.0f}  "
                   f"n=({n.x:+.3f}, {n.y:+.3f}, {n.z:+.3f})  "
                   f"CoM.z={com.z:.1f}  -> {tag}")
@@ -107,6 +116,10 @@ else:
             print(f"  face[{i:2d}] <error: {e}>")
 
     # ---- Find the primary sloped face and derive slope info ----
+    # A slope face is the LARGEST face that has some horizontal normal
+    # component AND some positive +Z component. Shallow pitches (e.g. 2
+    # deg) give nz very close to 1, so we must NOT reject on an upper
+    # nz threshold.
     print("\n--- Picked slope face ---")
     best = None
     best_area = 0.0
@@ -114,14 +127,15 @@ else:
         try:
             uv = face.Surface.parameter(face.CenterOfMass)
             n = face.normalAt(uv[0], uv[1]).normalize()
-            if n.z > 0.05 and n.z < 0.98 and face.Area > best_area:
+            horiz = math.sqrt(n.x * n.x + n.y * n.y)
+            if n.z > 0.01 and horiz > 1e-4 and face.Area > best_area:
                 best = (face, n)
                 best_area = face.Area
         except Exception:
             pass
 
     if best is None:
-        print("  No sloped face found (nz between 0.05 and 0.98).")
+        print("  No sloped face found (nz > 0.01 and horizontal component > 0).")
     else:
         face, n = best
         slope_rad = math.atan2(math.sqrt(n.x * n.x + n.y * n.y), n.z)
