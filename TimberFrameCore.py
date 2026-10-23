@@ -1,4 +1,10 @@
 # TimberFrame Core - Framing calculation logic
+#
+# Copyright (C) 2024-2026 Raf Urbanski <42356346+gomulius@users.noreply.github.com>
+#
+# This file is part of the TimberFrame workbench for FreeCAD.
+# It is distributed under the GNU General Public License v3.0 or later.
+# See the LICENSE file in the project root, or <https://www.gnu.org/licenses/gpl-3.0.txt>.
 
 import FreeCAD
 from FreeCAD import Vector, Placement, Rotation
