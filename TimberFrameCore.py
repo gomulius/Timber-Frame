@@ -1280,6 +1280,378 @@ def extract_slab_data(slab_obj):
     }
 
 
+# =========================================================================
+# Roof-to-Frame (R2): extract the geometry we need from a BIM Roof.
+# Phase 1 supports a single-slope (shed) roof plus a flat-roof fast path.
+# Multi-slope roofs raise NotImplementedError.
+# =========================================================================
+
+
+class RoofOpening:
+    """Hole in the roof (skylight / chimney / vent).
+
+    Stored in slope-local 2D coords:
+      - u: along the eave edge (0 = origin_eave end)
+      - v: along the slope going eave -> ridge
+      - width:  extent along u
+      - length: extent along v
+    """
+
+    def __init__(self, u, v, width, length, label=''):
+        self.u = u
+        self.v = v
+        self.width = width
+        self.length = length
+        self.label = label
+
+    def __repr__(self):
+        return (
+            f"RoofOpening({self.label!r}, u={self.u:.0f}, v={self.v:.0f}, "
+            f"w={self.width:.0f}, L={self.length:.0f})"
+        )
+
+
+def is_roof(obj):
+    """Return True if obj looks like a BIM/Arch roof."""
+    try:
+        if type(obj).__name__ in ('Roof', 'ArchRoof'):
+            return True
+        ifc = str(getattr(obj, 'IfcType', '')).lower()
+        if ifc in ('roof', 'ifcroof'):
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _roof_slope_faces(roof_obj):
+    """Return every slope face of a roof solid as (face, normal).
+
+    A slope face has +Z component AND some horizontal component. This
+    picks up shallow pitches (where |nz| is close to 1) just as well as
+    steep ones; it only excludes strictly horizontal and strictly
+    vertical faces.
+    """
+    out = []
+    for face in roof_obj.Shape.Faces:
+        try:
+            uv = face.Surface.parameter(face.CenterOfMass)
+            n = face.normalAt(uv[0], uv[1]).normalize()
+            horiz = math.sqrt(n.x * n.x + n.y * n.y)
+            if n.z > 0.01 and horiz > 1e-4:
+                out.append((face, n))
+        except Exception:
+            continue
+    # Sort largest first so callers that only want the main pitch can
+    # just take the head.
+    out.sort(key=lambda fn: fn[0].Area, reverse=True)
+    return out
+
+
+def _nearest_horizontal_edge_pair(face, normal, prefer_eave=True):
+    """Return (low_edge, high_edge) of a slope face.
+
+    The slope face's outer wire has 4 edges for a rectangular shed roof:
+    two run along the eave direction (constant lower Z and constant upper
+    Z) and two run along the rake (going from low to high). We identify
+    the two edges whose both endpoints are at the same Z - those are the
+    eave and the ridge.
+    """
+    outer = face.OuterWire
+    edges = outer.Edges
+
+    # Find min/max Z of the outer wire so we can match endpoints robustly
+    # even on shallow pitches where numeric roundoff matters.
+    zs = [v.Point.z for v in outer.Vertexes]
+    z_min = min(zs)
+    z_max = max(zs)
+    span = max(z_max - z_min, 1.0)
+    tol = max(0.5, span * 0.01)  # within 1% of the rise, min 0.5 mm
+
+    low_edge = None
+    high_edge = None
+    for e in edges:
+        if len(e.Vertexes) < 2:
+            continue
+        a = e.Vertexes[0].Point
+        b = e.Vertexes[-1].Point
+        at_low = abs(a.z - z_min) <= tol and abs(b.z - z_min) <= tol
+        at_high = abs(a.z - z_max) <= tol and abs(b.z - z_max) <= tol
+        if at_low and (low_edge is None or e.Length > low_edge.Length):
+            low_edge = e
+        elif at_high and (high_edge is None or e.Length > high_edge.Length):
+            high_edge = e
+
+    return low_edge, high_edge
+
+
+def _edge_as_segment(edge):
+    """Return (p1, p2) as world Vectors for a straight edge, with
+    p1.y <= p2.y (or p1.x <= p2.x if the edge runs along X)."""
+    a = edge.Vertexes[0].Point
+    b = edge.Vertexes[-1].Point
+    # Order endpoints deterministically so eave and ridge both start on
+    # the same "side" and the up-slope projection has a consistent sign.
+    if abs(b.y - a.y) > abs(b.x - a.x):
+        if b.y < a.y:
+            a, b = b, a
+    else:
+        if b.x < a.x:
+            a, b = b, a
+    return FreeCAD.Vector(a.x, a.y, a.z), FreeCAD.Vector(b.x, b.y, b.z)
+
+
+def _roof_openings_from_doc(roof_obj, origin_eave, eave_axis, up_slope_axis):
+    """Return RoofOpening instances for every chimney / skylight / dormer
+    cutout. Anything that isn't positively identifiable as an opening (or
+    is a structural element) is ignored, just like with walls and slabs."""
+    openings = []
+    seen = set()
+
+    def _project(point_world):
+        d = point_world - origin_eave
+        u = d.dot(eave_axis)
+        v = d.dot(up_slope_axis)
+        return u, v
+
+    def _bbox_to_opening(obj):
+        try:
+            bb = obj.Shape.BoundBox
+            corners_world = [
+                FreeCAD.Vector(bb.XMin, bb.YMin, bb.ZMin),
+                FreeCAD.Vector(bb.XMax, bb.YMin, bb.ZMin),
+                FreeCAD.Vector(bb.XMax, bb.YMax, bb.ZMin),
+                FreeCAD.Vector(bb.XMin, bb.YMax, bb.ZMin),
+                FreeCAD.Vector(bb.XMin, bb.YMin, bb.ZMax),
+                FreeCAD.Vector(bb.XMax, bb.YMin, bb.ZMax),
+                FreeCAD.Vector(bb.XMax, bb.YMax, bb.ZMax),
+                FreeCAD.Vector(bb.XMin, bb.YMax, bb.ZMax),
+            ]
+            uv = [_project(c) for c in corners_world]
+            us = [p[0] for p in uv]
+            vs = [p[1] for p in uv]
+            return RoofOpening(
+                u=min(us), v=min(vs),
+                width=max(us) - min(us),
+                length=max(vs) - min(vs),
+                label=str(getattr(obj, 'Label', '')),
+            )
+        except Exception as e:
+            FreeCAD.Console.PrintWarning(
+                f"Could not extract roof opening from "
+                f"{getattr(obj, 'Label', '?')}: {e}\n"
+            )
+            return None
+
+    if hasattr(roof_obj, 'Subtractions') and roof_obj.Subtractions:
+        for sub in roof_obj.Subtractions:
+            cls = type(sub).__name__
+            if cls in ('Wall', 'ArchWall', 'Slab', 'ArchSlab',
+                       'Floor', 'ArchFloor', 'Roof', 'ArchRoof'):
+                continue
+            seen.add(sub.Name)
+            op = _bbox_to_opening(sub)
+            if op is not None:
+                openings.append(op)
+
+    doc = roof_obj.Document
+    for obj in doc.Objects:
+        if obj.Name in seen:
+            continue
+        hosts = getattr(obj, 'Hosts', None)
+        host_list = (
+            hosts if isinstance(hosts, (list, tuple)) else [hosts] if hosts else []
+        )
+        if roof_obj not in host_list and getattr(obj, 'Host', None) != roof_obj:
+            continue
+        cls = type(obj).__name__
+        if cls in ('Wall', 'ArchWall', 'Slab', 'ArchSlab',
+                   'Floor', 'ArchFloor', 'Roof', 'ArchRoof'):
+            continue
+        seen.add(obj.Name)
+        op = _bbox_to_opening(obj)
+        if op is not None:
+            openings.append(op)
+
+    return openings
+
+
+def _flat_roof_data_from_base(roof_obj, settings_like_threshold_deg):
+    """Build a flat-roof data dict from the roof's base sketch, used by
+    the Phase-2 route that frames the roof as a horizontal joist platform.
+
+    Returns the same keys as the pitched case but with is_flat=True,
+    slope_angle_rad=0, up_slope_axis = unit vector along the base's short
+    side, eave_axis = unit vector along the base's long side.
+    """
+    bb = roof_obj.Shape.BoundBox
+    dx = bb.XMax - bb.XMin
+    dy = bb.YMax - bb.YMin
+    top_z = bb.ZMax
+    thickness = 0.0
+    try:
+        thickness = float(getattr(roof_obj, 'Thickness', [0])[0])
+    except Exception:
+        pass
+
+    # Long side = eave (joists span the shorter dimension)
+    if dx >= dy:
+        length = dx
+        width = dy
+        origin = FreeCAD.Vector(bb.XMin, bb.YMin, top_z)
+        eave_axis = FreeCAD.Vector(1, 0, 0)
+        up_slope_axis = FreeCAD.Vector(0, 1, 0)
+    else:
+        length = dy
+        width = dx
+        # Flip the origin to the high-X corner so up_slope sweeps into
+        # the roof (same trick we use for Y-aligned slabs).
+        origin = FreeCAD.Vector(bb.XMax, bb.YMin, top_z)
+        eave_axis = FreeCAD.Vector(0, 1, 0)
+        up_slope_axis = FreeCAD.Vector(-1, 0, 0)
+
+    openings = _roof_openings_from_doc(roof_obj, origin, eave_axis, up_slope_axis)
+
+    return {
+        'origin_eave': origin,
+        'eave_axis': eave_axis,
+        'up_slope_axis': up_slope_axis,
+        'face_normal': FreeCAD.Vector(0, 0, 1),
+        'eave_length': length,
+        'rafter_length': width,
+        'slope_angle_rad': 0.0,
+        'eave_z': top_z,
+        'ridge_z': top_z,
+        'thickness': thickness,
+        'overhang_eave': 0.0,
+        'overhang_rake': 0.0,
+        'placement': roof_obj.Placement,
+        'openings': openings,
+        'is_flat': True,
+    }
+
+
+def extract_roof_data(roof_obj, flat_threshold_deg=0.5):
+    """Extract everything the roof-to-frame builder needs.
+
+    Phase 1 constraints:
+      - Single-slope (shed) roofs are fully supported.
+      - Flat roofs (slope <= flat_threshold_deg or no slope face at all)
+        are routed through a horizontal joist layout.
+      - Multi-slope roofs (gable, hip, ...) raise NotImplementedError.
+
+    Returns a dict - see ROOF_PLAN.md section "R2" for the keys.
+    """
+    faces = _roof_slope_faces(roof_obj)
+
+    # 0 slope faces -> flat
+    if not faces:
+        return _flat_roof_data_from_base(roof_obj, flat_threshold_deg)
+
+    # Primary slope face (largest). If there's more than one slope face
+    # of comparable area we have a multi-slope roof.
+    primary_face, primary_n = faces[0]
+    if len(faces) > 1:
+        second_area = faces[1][0].Area
+        if second_area > primary_face.Area * 0.25:
+            raise NotImplementedError(
+                f"Roof {roof_obj.Label!r} has {len(faces)} slope faces "
+                "(looks like a multi-slope roof - gable / hip / ...). "
+                "Phase 3 of the roof converter will handle these; for "
+                "now only single-slope (shed) roofs are supported."
+            )
+
+    horiz = math.sqrt(primary_n.x ** 2 + primary_n.y ** 2)
+    slope_rad = math.atan2(horiz, primary_n.z)
+    slope_deg = math.degrees(slope_rad)
+
+    # Flat-roof fast path for very shallow pitches.
+    if slope_deg <= flat_threshold_deg:
+        return _flat_roof_data_from_base(roof_obj, flat_threshold_deg)
+
+    # ---- Build the slope-local basis from the primary face ------------
+    low_edge, high_edge = _nearest_horizontal_edge_pair(primary_face, primary_n)
+    if low_edge is None or high_edge is None:
+        raise RuntimeError(
+            f"Roof {roof_obj.Label!r}: could not identify eave and ridge "
+            "edges on the primary slope face. Only rectangular shed-roof "
+            "outlines are supported in Phase 1."
+        )
+
+    eave_p1, eave_p2 = _edge_as_segment(low_edge)
+    ridge_p1, ridge_p2 = _edge_as_segment(high_edge)
+
+    eave_vec = eave_p2 - eave_p1
+    eave_length = eave_vec.Length
+    eave_axis = FreeCAD.Vector(eave_vec)
+    eave_axis.normalize()
+
+    # Up-slope axis in 3D: horizontal projection of the face normal
+    # points OUTWARD from the slope (away from the roof body). The
+    # vector going from eave to ridge is the opposite horizontal
+    # direction, lifted by the pitch.
+    horiz_vec = FreeCAD.Vector(-primary_n.x, -primary_n.y, 0)
+    if horiz_vec.Length > 1e-9:
+        horiz_vec.normalize()
+    # Combine horizontal travel with vertical rise to get the real 3D
+    # up-slope direction (unit vector along the rafter).
+    up_slope_axis = FreeCAD.Vector(
+        horiz_vec.x * math.cos(slope_rad),
+        horiz_vec.y * math.cos(slope_rad),
+        math.sin(slope_rad),
+    )
+    up_slope_axis.normalize()
+
+    # Rafter length (hypotenuse): distance from a point on the eave to
+    # the ridge measured along up_slope_axis.
+    ridge_mid = (ridge_p1 + ridge_p2) * 0.5
+    eave_mid = (eave_p1 + eave_p2) * 0.5
+    rafter_length = (ridge_mid - eave_mid).Length
+
+    # Thickness (material depth, perpendicular to the slope). Prefer the
+    # roof's own Thickness[0] property; fall back to a sensible value.
+    thickness = 0.0
+    try:
+        t = getattr(roof_obj, 'Thickness', None)
+        if t:
+            thickness = float(t[0])
+    except Exception:
+        pass
+    if thickness <= 0:
+        thickness = 150.0
+
+    overhang_eave = 0.0
+    overhang_rake = 0.0
+    try:
+        oh = getattr(roof_obj, 'Overhang', None)
+        if oh:
+            overhang_eave = float(oh[0])
+    except Exception:
+        pass
+
+    openings = _roof_openings_from_doc(
+        roof_obj, eave_p1, eave_axis, up_slope_axis
+    )
+
+    return {
+        'origin_eave': eave_p1,
+        'eave_axis': eave_axis,
+        'up_slope_axis': up_slope_axis,
+        'face_normal': primary_n,
+        'eave_length': eave_length,
+        'rafter_length': rafter_length,
+        'slope_angle_rad': slope_rad,
+        'eave_z': eave_p1.z,
+        'ridge_z': ridge_p1.z,
+        'thickness': thickness,
+        'overhang_eave': overhang_eave,
+        'overhang_rake': overhang_rake,
+        'placement': roof_obj.Placement,
+        'openings': openings,
+        'is_flat': False,
+    }
+
+
 # -------------------------------------------------------------------------
 # Floor framing calculator (step 3): rim joists + end joists + joists.
 # Openings (trimmers + headers + tail joists) are a step-4 concern.

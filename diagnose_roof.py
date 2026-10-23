@@ -179,3 +179,32 @@ else:
             host_list = hosts if isinstance(hosts, (list, tuple)) else [hosts]
             if target in host_list:
                 print(f"  Hosted: {obj.Label}  ({type(obj).__name__})")
+
+    # ---- extract_roof_data (R2 output) ----
+    print("\n--- extract_roof_data(roof) ---")
+    try:
+        data = Core.extract_roof_data(target)
+    except NotImplementedError as e:
+        print(f"  NotImplementedError: {e}")
+    except Exception as e:
+        import traceback
+        print(f"  FAILED: {e}")
+        print(traceback.format_exc())
+    else:
+        for key in ("is_flat", "slope_angle_rad",
+                    "eave_length", "rafter_length",
+                    "eave_z", "ridge_z", "thickness",
+                    "overhang_eave", "overhang_rake"):
+            print(f"  {key:18s} = {data[key]}")
+        print(f"  origin_eave      = ({data['origin_eave'].x:.1f}, "
+              f"{data['origin_eave'].y:.1f}, {data['origin_eave'].z:.1f})")
+        print(f"  eave_axis        = ({data['eave_axis'].x:+.3f}, "
+              f"{data['eave_axis'].y:+.3f}, {data['eave_axis'].z:+.3f})")
+        print(f"  up_slope_axis    = ({data['up_slope_axis'].x:+.3f}, "
+              f"{data['up_slope_axis'].y:+.3f}, {data['up_slope_axis'].z:+.3f})")
+        print(f"  face_normal      = ({data['face_normal'].x:+.3f}, "
+              f"{data['face_normal'].y:+.3f}, {data['face_normal'].z:+.3f})")
+        print(f"  slope_angle_deg  = {math.degrees(data['slope_angle_rad']):.3f}")
+        print(f"  openings ({len(data['openings'])}):")
+        for op in data['openings']:
+            print(f"    {op}")
