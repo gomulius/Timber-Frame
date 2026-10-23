@@ -51,6 +51,25 @@ class TimberSettings:
         self.floor_sheathing_thickness = 22.0  # mm, 0 = no deck
         self.floor_blocking_every = 0.0        # mm between rows, 0 = none
 
+        # -------- Roof (Pitch-to-Frame) settings --------
+        # Convert a BIM Roof into a timber rafter frame. Default disabled
+        # so existing wall + floor conversions are unaffected.
+        #
+        # Phase 1 supports single-slope (shed) roofs. Flat roofs below
+        # flat_roof_threshold_deg route through the floor frame builder
+        # with these settings mapped onto floor settings (rafter -> joist,
+        # wall_plate -> rim, ...).
+        self.roof_enabled = False
+        self.rafter_width = 45.0        # mm, narrow dimension (along eave)
+        self.rafter_depth = 180.0       # mm, perpendicular to the slope
+        self.rafter_spacing = 600.0     # mm, centre-to-centre along eave
+        self.roof_wall_plate = True     # eave plate on top of outer walls
+        self.roof_ridge_plate = True    # ridge plate at the high side
+        self.roof_sheathing_thickness = 18.0   # mm, 0 = no deck
+        self.roof_overhang_eave = 0.0   # mm, extends rafters past eave
+        self.roof_overhang_rake = 0.0   # mm, extends plates past gables
+        self.flat_roof_threshold_deg = 0.5  # Phase 2 trigger
+
     def to_dict(self):
         """Convert settings to dictionary for storage."""
         return {
@@ -77,6 +96,18 @@ class TimberSettings:
             'floor_deck_direction': self.floor_deck_direction,
             'floor_sheathing_thickness': self.floor_sheathing_thickness,
             'floor_blocking_every': self.floor_blocking_every,
+
+            # Roof
+            'roof_enabled': self.roof_enabled,
+            'rafter_width': self.rafter_width,
+            'rafter_depth': self.rafter_depth,
+            'rafter_spacing': self.rafter_spacing,
+            'roof_wall_plate': self.roof_wall_plate,
+            'roof_ridge_plate': self.roof_ridge_plate,
+            'roof_sheathing_thickness': self.roof_sheathing_thickness,
+            'roof_overhang_eave': self.roof_overhang_eave,
+            'roof_overhang_rake': self.roof_overhang_rake,
+            'flat_roof_threshold_deg': self.flat_roof_threshold_deg,
         }
     
     def from_dict(self, data):
@@ -136,6 +167,15 @@ class TimberMember:
         'tail_joist': 'Tail Joist',
         'floor_blocking': 'Blocking',
         'floor_sheathing': 'Floor Sheathing',
+
+        # --- Roof members (R1: vocabulary only, no geometry yet) ---
+        'rafter': 'Rafter',
+        'wall_plate_roof': 'Roof Wall Plate',
+        'ridge_plate': 'Ridge Plate',
+        'roof_trimmer': 'Roof Trimmer',
+        'roof_header': 'Roof Header',
+        'roof_tail_rafter': 'Tail Rafter',
+        'roof_sheathing': 'Roof Sheathing',
     }
     
     def __init__(self, member_type, x, y, z, length, width, depth, orientation='vertical'):

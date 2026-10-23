@@ -255,6 +255,118 @@ class FloorSettingsDialog(_BaseSettingsDialog):
         return s
 
 
+class RoofSettingsDialog(_BaseSettingsDialog):
+    """Settings dialog shown when converting ROOFS to rafter frames.
+
+    Only exposes roof-relevant controls. Wall / floor fields on the
+    TimberSettings object are left untouched. roof_enabled is forced ON
+    on save: reaching this dialog is positive consent.
+    """
+
+    WINDOW_TITLE = "Roof Framing Settings"
+
+    def build_content(self, layout):
+        info = QtGui.QLabel(
+            "Rafter frame under a BIM Roof. Phase 1 supports "
+            "single-slope (shed) roofs. Flat roofs (pitch below the "
+            "threshold) will be framed as a horizontal joist platform."
+        )
+        info.setWordWrap(True)
+        info.setStyleSheet("color: gray; font-size: 10px;")
+        layout.addWidget(info)
+
+        # Rafters
+        g = QtGui.QGroupBox("Rafters")
+        f = QtGui.QFormLayout(g)
+        self.rafter_width_spin = self._create_length_spinbox(20, 150, 45)
+        f.addRow("Rafter Width:", self.rafter_width_spin)
+        self.rafter_depth_spin = self._create_length_spinbox(80, 400, 180)
+        f.addRow("Rafter Depth:", self.rafter_depth_spin)
+        self.rafter_spacing_spin = self._create_length_spinbox(300, 1200, 600)
+        f.addRow("Rafter Spacing:", self.rafter_spacing_spin)
+        layout.addWidget(g)
+
+        # Perimeter plates
+        g = QtGui.QGroupBox("Plates")
+        f = QtGui.QFormLayout(g)
+        self.wall_plate_check = QtGui.QCheckBox(
+            "Wall plate on the eave (top of outer wall)"
+        )
+        self.wall_plate_check.setChecked(True)
+        f.addRow("", self.wall_plate_check)
+        self.ridge_plate_check = QtGui.QCheckBox(
+            "Ridge plate on the high side"
+        )
+        self.ridge_plate_check.setChecked(True)
+        f.addRow("", self.ridge_plate_check)
+        layout.addWidget(g)
+
+        # Overhangs
+        g = QtGui.QGroupBox("Overhangs")
+        f = QtGui.QFormLayout(g)
+        self.overhang_eave_spin = self._create_length_spinbox(0, 2000, 0)
+        self.overhang_eave_spin.setSpecialValueText("none")
+        f.addRow("Eave Overhang:", self.overhang_eave_spin)
+        self.overhang_rake_spin = self._create_length_spinbox(0, 2000, 0)
+        self.overhang_rake_spin.setSpecialValueText("none")
+        f.addRow("Rake Overhang:", self.overhang_rake_spin)
+        layout.addWidget(g)
+
+        # Deck
+        g = QtGui.QGroupBox("Sheathing")
+        f = QtGui.QFormLayout(g)
+        self.roof_sheathing_spin = self._create_length_spinbox(0, 50, 18)
+        self.roof_sheathing_spin.setSpecialValueText("off")
+        f.addRow("Sheathing Thickness:", self.roof_sheathing_spin)
+        layout.addWidget(g)
+
+        # Flat-roof threshold (small, usually hidden under an advanced
+        # label - but a shed roof at 1 deg or less is actually common for
+        # drainage falls, so expose it).
+        g = QtGui.QGroupBox("Flat Roof")
+        f = QtGui.QFormLayout(g)
+        self.flat_threshold_spin = QtGui.QDoubleSpinBox()
+        self.flat_threshold_spin.setRange(0.0, 10.0)
+        self.flat_threshold_spin.setValue(0.5)
+        self.flat_threshold_spin.setSuffix(" deg")
+        self.flat_threshold_spin.setDecimals(2)
+        f.addRow("Treat as flat if pitch <=:", self.flat_threshold_spin)
+        hint = QtGui.QLabel(
+            "Below this pitch the roof is framed as a horizontal joist "
+            "platform (Phase 2 of roof support)."
+        )
+        hint.setStyleSheet("color: gray; font-size: 10px;")
+        hint.setWordWrap(True)
+        f.addRow("", hint)
+        layout.addWidget(g)
+
+    def load_settings(self):
+        s = self.settings
+        self.rafter_width_spin.setValue(s.rafter_width)
+        self.rafter_depth_spin.setValue(s.rafter_depth)
+        self.rafter_spacing_spin.setValue(s.rafter_spacing)
+        self.wall_plate_check.setChecked(s.roof_wall_plate)
+        self.ridge_plate_check.setChecked(s.roof_ridge_plate)
+        self.overhang_eave_spin.setValue(s.roof_overhang_eave)
+        self.overhang_rake_spin.setValue(s.roof_overhang_rake)
+        self.roof_sheathing_spin.setValue(s.roof_sheathing_thickness)
+        self.flat_threshold_spin.setValue(s.flat_roof_threshold_deg)
+
+    def save_settings(self):
+        s = self.settings
+        s.rafter_width = self.rafter_width_spin.value()
+        s.rafter_depth = self.rafter_depth_spin.value()
+        s.rafter_spacing = self.rafter_spacing_spin.value()
+        s.roof_wall_plate = self.wall_plate_check.isChecked()
+        s.roof_ridge_plate = self.ridge_plate_check.isChecked()
+        s.roof_overhang_eave = self.overhang_eave_spin.value()
+        s.roof_overhang_rake = self.overhang_rake_spin.value()
+        s.roof_sheathing_thickness = self.roof_sheathing_spin.value()
+        s.flat_roof_threshold_deg = self.flat_threshold_spin.value()
+        s.roof_enabled = True   # positive consent
+        return s
+
+
 # Backwards-compat alias: anything that still imports the old name gets the
 # wall dialog, which is the pre-split behaviour for wall conversion.
 TimberFrameSettingsDialog = WallSettingsDialog
@@ -812,6 +924,78 @@ class ConvertSlabCommand:
             )
 
 
+def _is_roof(obj):
+    """Duck-type check for an Arch Roof-like object."""
+    try:
+        cls = type(obj).__name__
+        if cls in ('Roof', 'ArchRoof'):
+            return True
+        ifc = str(getattr(obj, 'IfcType', '')).lower()
+        if ifc in ('roof', 'ifcroof'):
+            return True
+    except Exception:
+        pass
+    return False
+
+
+class ConvertRoofCommand:
+    """Convert selected BIM roof(s) to a timber rafter frame.
+
+    R1: stub. The dialog opens, the roof is identified, settings are
+    stored on an empty frame group. Actual geometry is implemented in
+    R2..R6.
+    """
+
+    def GetResources(self):
+        return {
+            'MenuText': "Convert Roof to Frame",
+            'ToolTip': (
+                "Convert the selected BIM roof(s) to a timber rafter "
+                "frame (single-slope / flat; multi-slope later)"
+            ),
+            'Pixmap': _icon_path('convert_roof.svg'),
+        }
+
+    def IsActive(self):
+        if FreeCAD.ActiveDocument is None:
+            return False
+        return len(FreeCADGui.Selection.getSelection()) > 0
+
+    def Activated(self):
+        doc = FreeCAD.ActiveDocument
+        selection = FreeCADGui.Selection.getSelection()
+        roofs = [o for o in selection if _is_roof(o)]
+
+        if not roofs:
+            QtGui.QMessageBox.warning(
+                None, "No Roofs",
+                "No BIM roof (Arch Roof) was found in the selection.\n"
+                "Select one or more roofs and try again."
+            )
+            return
+
+        settings = Core.TimberSettings()
+        dialog = RoofSettingsDialog(settings)
+        if dialog.exec_() != QtGui.QDialog.Accepted:
+            return
+        settings = dialog.save_settings()
+
+        # R1 stub: just surface what we picked up. R2+ will build the
+        # frame. We purposely do NOT create a frame group yet so there
+        # is nothing stale to clean up when R2 lands.
+        FreeCAD.Console.PrintMessage(
+            f"Roof conversion is not yet implemented (R1 stub). "
+            f"Picked {len(roofs)} roof(s), "
+            f"rafter_spacing={settings.rafter_spacing:.0f} mm, "
+            f"rafter={settings.rafter_width:.0f}x{settings.rafter_depth:.0f} mm.\n"
+        )
+        QtGui.QMessageBox.information(
+            None, "Roof conversion - R1",
+            "Settings captured. Geometry builder lands in step R2 "
+            "(rafter + plate layout). No frame has been created yet."
+        )
+
+
 class EditFrameCommand:
     """Command to edit a timber frame using sketcher."""
     
@@ -1355,19 +1539,23 @@ class SettingsCommand:
     def Activated(self):
         settings = Core.TimberSettings()
 
-        # Simple two-choice launcher so Wall and Floor settings each live in
-        # their own focused dialog instead of being mashed together.
+        # Simple three-choice launcher so Wall, Floor and Roof settings
+        # each live in their own focused dialog.
         choice = QtGui.QInputDialog.getItem(
             None, "Timber Frame Settings",
             "Which defaults would you like to edit?",
-            ["Wall framing", "Floor (Base) framing"],
+            ["Wall framing", "Floor (Base) framing", "Roof framing"],
             0, False,
         )
         if not choice[1]:
             return
         picked = choice[0]
 
-        dialog_cls = WallSettingsDialog if picked == "Wall framing" else FloorSettingsDialog
+        dialog_cls = {
+            "Wall framing":          WallSettingsDialog,
+            "Floor (Base) framing":  FloorSettingsDialog,
+            "Roof framing":          RoofSettingsDialog,
+        }.get(picked, WallSettingsDialog)
         dialog = dialog_cls(settings)
         if dialog.exec_() == QtGui.QDialog.Accepted:
             dialog.save_settings()
@@ -1381,6 +1569,7 @@ class SettingsCommand:
 # Register commands
 FreeCADGui.addCommand('TimberFrame_ConvertWall', ConvertWallCommand())
 FreeCADGui.addCommand('TimberFrame_ConvertSlab', ConvertSlabCommand())
+FreeCADGui.addCommand('TimberFrame_ConvertRoof', ConvertRoofCommand())
 FreeCADGui.addCommand('TimberFrame_EditFrame', EditFrameCommand())
 FreeCADGui.addCommand('TimberFrame_RebuildFrame', RebuildFrameCommand())
 FreeCADGui.addCommand('TimberFrame_RegenerateFrame', RegenerateFrameCommand())
