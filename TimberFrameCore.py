@@ -2147,35 +2147,38 @@ def _build_roof_box(member, pitch):
             origin.z + eave.z * u + up.z * v,
         )
 
+    # The slope face lives on the TOP surface of the BIM roof solid.
+    # extract_roof_data gives us origin_eave on that top face, so if we
+    # extrude every member upward from there the frame ends up ABOVE the
+    # original slab. Extrude downward instead so the frame's TOP face
+    # is flush with the roof's top face - the frame then occupies the
+    # same volume the BIM slab had, and the hidden slab lines up
+    # correctly if the user ever re-shows it.
     if member.orientation == RoofFrameCalculator._ORIENT_PLATE:
-        # Eave / ridge plate: a long beam laid flat along the eave (u).
-        # The stored geometry has length = eave_length (u-extent) and
-        # width = v-extent (how far it reaches into the roof). Build the
-        # bottom face on the slope plane...
+        # Eave / ridge plate: beam laid flat along the eave. Build the
+        # TOP face on the slope plane, extrude straight DOWN in world Z.
         p1 = _P(u0, v0)
         p2 = _P(u0 + member.length, v0)
         p3 = _P(u0 + member.length, v0 + member.width)
         p4 = _P(u0, v0 + member.width)
-        # ...and extrude straight UP in world Z by the plate's thickness
-        # so the top face stays horizontal even on a shallow slope.
         wire = Part.makePolygon([p1, p2, p3, p4, p1])
         face = Part.Face(wire)
-        return face.extrude(FreeCAD.Vector(0, 0, member.depth))
+        return face.extrude(FreeCAD.Vector(0, 0, -member.depth))
 
     if member.orientation == RoofFrameCalculator._ORIENT_RAKE_PLATE:
-        # Rake plate: like an eave/ridge plate, but runs along +v (up
-        # the slope) and spans u by member.width. Build the base on the
-        # slope face and extrude straight up in world Z.
+        # Rake plate: runs along +v up the slope. Same convention.
         p1 = _P(u0, v0)
         p2 = _P(u0 + member.width, v0)
         p3 = _P(u0 + member.width, v0 + member.length)
         p4 = _P(u0, v0 + member.length)
         wire = Part.makePolygon([p1, p2, p3, p4, p1])
         face = Part.Face(wire)
-        return face.extrude(FreeCAD.Vector(0, 0, member.depth))
+        return face.extrude(FreeCAD.Vector(0, 0, -member.depth))
 
     if member.orientation == RoofFrameCalculator._ORIENT_RAFTER:
-        # Base rectangle lies on the slope face.
+        # Rafter: top face is ON the slope. Extrude DOWN along the
+        # inward normal (-n) by rafter_depth so the rafter hangs below
+        # the top surface of the roof solid instead of poking above it.
         p1 = _P(u0, v0)
         p2 = _P(u1, v0)
         p3 = _P(u1, v1)
@@ -2183,14 +2186,13 @@ def _build_roof_box(member, pitch):
         wire = Part.makePolygon([p1, p2, p3, p4, p1])
         face = Part.Face(wire)
         return face.extrude(
-            FreeCAD.Vector(n.x * member.depth,
-                           n.y * member.depth,
-                           n.z * member.depth)
+            FreeCAD.Vector(-n.x * member.depth,
+                           -n.y * member.depth,
+                           -n.z * member.depth)
         )
 
     if member.orientation == RoofFrameCalculator._ORIENT_BLOCKING:
-        # Blocking: short piece between two rafters, oriented like a
-        # rafter (on edge, extruded along the slope normal) but short.
+        # Blocking: oriented like a rafter but shorter. Same convention.
         p1 = _P(u0, v0)
         p2 = _P(u0 + member.length, v0)
         p3 = _P(u0 + member.length, v0 + member.width)
@@ -2198,9 +2200,9 @@ def _build_roof_box(member, pitch):
         wire = Part.makePolygon([p1, p2, p3, p4, p1])
         face = Part.Face(wire)
         return face.extrude(
-            FreeCAD.Vector(n.x * member.depth,
-                           n.y * member.depth,
-                           n.z * member.depth)
+            FreeCAD.Vector(-n.x * member.depth,
+                           -n.y * member.depth,
+                           -n.z * member.depth)
         )
 
     raise ValueError(
