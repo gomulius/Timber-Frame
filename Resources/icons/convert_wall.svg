@@ -1,14 +1,15 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
-  <!-- Solid wall (source) on the left -->
+  <!-- Source: solid wall on the left -->
   <rect x="4" y="8" width="18" height="48" fill="#808080"
         stroke="#404040" stroke-width="2"/>
 
-  <!-- Clearly visible right-arrow in the gap -->
-  <polygon points="26,32 36,22 36,28 46,28 46,36 36,36 36,42"
+  <!-- Arrow pointing from wall (left) to frame (right): tip is on the
+       RIGHT at x=46. Shaft starts at x=26. -->
+  <polygon points="26,28 36,28 36,22 46,32 36,42 36,36 26,36"
            fill="#4CAF50" stroke="#2E7D32" stroke-width="1"/>
 
-  <!-- Timber frame (result) on the right, placed well clear of the arrow -->
+  <!-- Result: timber frame on the right -->
   <g stroke="#8B4513" stroke-width="1">
     <!-- top plate -->
     <rect x="48" y="10" width="12" height="4" fill="#DEB887"/>
