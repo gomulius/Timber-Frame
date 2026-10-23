@@ -33,6 +33,7 @@ class TimberFrameWorkbench(FreeCADGui.Workbench):
             "TimberFrame_RebuildFrame",
             "TimberFrame_GenerateBlueprint",
             "TimberFrame_GenerateCutList",
+            "TimberFrame_Export3DPrint",
             "TimberFrame_Settings",
         ]
         

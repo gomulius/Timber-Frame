@@ -506,6 +506,35 @@ def _frame_groups_with_source(doc):
     return out
 
 
+def _collect_frame_leaves(group):
+    """Walk a frame group recursively and return every leaf object that
+    carries a Shape - typically the Part::Features for each timber
+    member. Sub-groups (per-segment groups for multi-segment walls) are
+    descended into."""
+    leaves = []
+    stack = list(getattr(group, 'Group', []))
+    while stack:
+        obj = stack.pop()
+        if obj is None:
+            continue
+        if hasattr(obj, 'Group'):
+            stack.extend(obj.Group)
+            continue
+        if getattr(obj, 'Shape', None) is not None:
+            leaves.append(obj)
+    return leaves
+
+
+def _frame_groups_in_doc(doc):
+    """Any top-level Frame_* group - used by commands that work on the
+    frame as a whole (blueprint, cut list, export) regardless of whether
+    the group has a SourceWall/Slab/Roof link."""
+    return [
+        obj for obj in doc.Objects
+        if obj.Label.startswith("Frame_") and hasattr(obj, 'Group')
+    ]
+
+
 def _delete_frame_group_recursive(doc, group):
     """Delete a frame group and all objects it (transitively) contains."""
     # Snapshot contents first - mutating the group as we iterate is unsafe.
@@ -1668,6 +1697,177 @@ class GenerateCutListCommand:
         )
 
 
+class Export3DPrintCommand:
+    """Export a timber frame as a scaled 3MF file ready for a 3D printer.
+
+    Replicates the manual workflow:
+      1. Collect every timber member in the chosen frame group.
+      2. Fuse them into a single solid (Part.multiFuse).
+      3. Scale uniformly from the world origin by 1 / scale_denominator
+         (default 30 -> 1:30 scale model).
+      4. Mesh the result and export as .3mf to a user-picked path.
+
+    Nothing is written to the document - the scaled solid is a transient
+    shape; the only persistent output is the .3mf file. If the user
+    cancels the file dialog nothing is produced.
+    """
+
+    def GetResources(self):
+        return {
+            'MenuText': "Export for 3D Printing (3MF)",
+            'ToolTip': (
+                "Fuse the selected frame, scale it down (e.g. 1:30), "
+                "and export as .3mf for 3D printing."
+            ),
+            'Pixmap': _icon_path('export_3dprint.svg'),
+        }
+
+    def IsActive(self):
+        if FreeCAD.ActiveDocument is None:
+            return False
+        return bool(_frame_groups_in_doc(FreeCAD.ActiveDocument))
+
+    def Activated(self):
+        doc = FreeCAD.ActiveDocument
+        groups = _frame_groups_in_doc(doc)
+        if not groups:
+            QtGui.QMessageBox.warning(
+                None, "No Frame",
+                "No Frame_* group found. Convert a wall / slab / roof first."
+            )
+            return
+
+        # Pick target group: selection first, then auto-single, then picker.
+        selected = FreeCADGui.Selection.getSelection() or []
+        candidates = [g for g in groups if g in selected] or groups
+        if len(candidates) == 1:
+            group = candidates[0]
+        else:
+            items = [g.Label for g in candidates]
+            label, ok = QtGui.QInputDialog.getItem(
+                None, "Export for 3D Printing",
+                "Choose the frame group to export:", items, 0, False
+            )
+            if not ok:
+                return
+            group = next(g for g in candidates if g.Label == label)
+
+        # Ask for the scale.
+        scale_denom, ok = QtGui.QInputDialog.getInt(
+            None, "Export for 3D Printing",
+            "Scale 1 : N  (e.g. 30 for a 1:30 model)",
+            30, 2, 1000, 1,
+        )
+        if not ok:
+            return
+        if scale_denom <= 1:
+            QtGui.QMessageBox.warning(
+                None, "Invalid scale",
+                "Scale denominator must be >= 2."
+            )
+            return
+
+        # Ask for the output file.
+        suggested_name = f"{group.Label}_1-{scale_denom}.3mf"
+        suggested_path = os.path.join(
+            os.path.dirname(doc.FileName) if doc.FileName else os.path.expanduser("~"),
+            suggested_name,
+        )
+        target_path, _flt = QtGui.QFileDialog.getSaveFileName(
+            None, "Export for 3D Printing",
+            suggested_path,
+            "3MF files (*.3mf);;STL files (*.stl)"
+        )
+        if not target_path:
+            return
+
+        try:
+            self._export(group, scale_denom, target_path)
+        except Exception as e:
+            import traceback
+            FreeCAD.Console.PrintError(
+                f"Export failed: {e}\n{traceback.format_exc()}"
+            )
+            QtGui.QMessageBox.critical(
+                None, "Export failed", f"Could not export frame:\n{e}"
+            )
+
+    def _export(self, group, scale_denom, target_path):
+        import Part
+        import Mesh
+        import MeshPart
+
+        leaves = _collect_frame_leaves(group)
+        if not leaves:
+            raise RuntimeError(
+                f"'{group.Label}' contains no shapes to export."
+            )
+        FreeCAD.Console.PrintMessage(
+            f"Export: {group.Label} - {len(leaves)} member(s), scale 1:{scale_denom}\n"
+        )
+
+        # Fuse all member shapes into one solid.
+        shapes = [m.Shape for m in leaves]
+        if len(shapes) == 1:
+            fused = shapes[0].copy()
+        else:
+            fused = shapes[0].multiFuse(shapes[1:])
+
+        # Scale uniformly from the world origin by 1 / scale_denom.
+        # Part.Shape.scale is in-place; copy() to be safe.
+        factor = 1.0 / float(scale_denom)
+        scaled = fused.copy()
+        try:
+            scaled.scale(factor)
+        except Exception:
+            # Fallback: build a transformation Matrix explicitly.
+            import FreeCAD as _FC
+            mat = _FC.Matrix()
+            mat.scale(factor, factor, factor)
+            scaled = scaled.transformGeometry(mat)
+
+        # Report size so the user can sanity-check it fits the printer bed.
+        bb = scaled.BoundBox
+        dx = bb.XMax - bb.XMin
+        dy = bb.YMax - bb.YMin
+        dz = bb.ZMax - bb.ZMin
+        FreeCAD.Console.PrintMessage(
+            f"  Scaled shape bbox: {dx:.1f} x {dy:.1f} x {dz:.1f} mm "
+            f"(fits on most 220 x 220 mm beds if under those numbers)\n"
+        )
+
+        # Mesh and export. 3MF and STL are both covered by Mesh.export.
+        mesh = MeshPart.meshFromShape(
+            scaled,
+            LinearDeflection=0.1,
+            AngularDeflection=0.3,
+            Relative=False,
+        )
+        # Mesh.export wants a Mesh::Feature or a Mesh.Mesh via a document
+        # object - build a temporary one, export, then remove it.
+        doc = FreeCAD.ActiveDocument
+        temp_name = f"__TF_export_tmp_{group.Name}"
+        tmp = doc.addObject("Mesh::Feature", temp_name)
+        try:
+            tmp.Mesh = mesh
+            Mesh.export([tmp], target_path)
+        finally:
+            try:
+                doc.removeObject(tmp.Name)
+            except Exception:
+                pass
+
+        FreeCAD.Console.PrintMessage(
+            f"  Written: {target_path}\n"
+        )
+        QtGui.QMessageBox.information(
+            None, "Export complete",
+            f"Exported '{group.Label}' at 1:{scale_denom}\n"
+            f"Scaled size: {dx:.1f} x {dy:.1f} x {dz:.1f} mm\n\n"
+            f"File: {target_path}"
+        )
+
+
 class SettingsCommand:
     """Command to open settings dialog."""
     
@@ -1720,4 +1920,5 @@ FreeCADGui.addCommand('TimberFrame_RebuildFrame', RebuildFrameCommand())
 FreeCADGui.addCommand('TimberFrame_RegenerateFrame', RegenerateFrameCommand())
 FreeCADGui.addCommand('TimberFrame_GenerateBlueprint', GenerateBlueprintCommand())
 FreeCADGui.addCommand('TimberFrame_GenerateCutList', GenerateCutListCommand())
+FreeCADGui.addCommand('TimberFrame_Export3DPrint', Export3DPrintCommand())
 FreeCADGui.addCommand('TimberFrame_Settings', SettingsCommand())
