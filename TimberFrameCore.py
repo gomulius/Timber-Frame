@@ -1894,6 +1894,245 @@ def create_floor_frame_group(doc, slab_obj, members, slab_data, settings,
     return group
 
 
+# =========================================================================
+# Roof framing calculator + geometry builder (R3).
+# Phase 1 scope: wall plate on the eave, ridge plate on the ridge, rafters
+# between them at `rafter_spacing` centres. Overhangs land in R4, sheathing
+# in R5, openings in R6.
+# =========================================================================
+
+
+class RoofFrameCalculator:
+    """Lay out rafters + plates for a single-slope roof.
+
+    Operates on a `pitch` dict with the same shape as extract_roof_data()
+    returns. All geometry is produced in slope-local (u, v) coordinates:
+      u -> along the eave edge (0 = origin_eave)
+      v -> along the slope going eave -> ridge
+    plus a thickness perpendicular to the slope face. The geometry
+    builder (_build_roof_box) maps (u, v, thickness) into world coords
+    using the pitch's basis vectors.
+    """
+
+    # Local orientation tags consumed by _build_roof_box.
+    #   'roof_plate'  - member laid flat on the (u, v=const) line,
+    #                   extruded upward (world +Z)
+    #   'roof_rafter' - member tilted along +v with its depth normal to
+    #                   the slope face
+    _ORIENT_PLATE = 'roof_plate'
+    _ORIENT_RAFTER = 'roof_rafter'
+
+    def __init__(self, pitch, settings=None):
+        self.pitch = pitch
+        self.settings = settings or TimberSettings()
+        self.members = []
+
+    def calculate(self):
+        self.members = []
+        s = self.settings
+        p = self.pitch
+
+        # Plate thickness = rafter_width (plate is "laid flat"), plate
+        # depth into the wall = plate's width across the eave. We reuse
+        # rafter_width as both for consistency with light-timber shed
+        # construction; a dedicated plate_depth setting can be added
+        # later if required.
+        plate_t = s.rafter_width
+
+        # 1. Wall plate on the eave (v = 0).
+        if s.roof_wall_plate:
+            self.members.append(TimberMember(
+                'wall_plate_roof',
+                x=0.0,                  # u-start
+                y=0.0,                  # v position
+                z=0.0,                  # unused for plates
+                length=p['eave_length'],
+                width=s.rafter_width,   # extent along v (into the roof)
+                depth=plate_t,          # vertical thickness in world Z
+                orientation=self._ORIENT_PLATE,
+            ))
+
+        # 2. Ridge plate at v = rafter_length. Its "width" extent is
+        #    carved OUT of the roof (negative v) so the plate sits just
+        #    short of the ridge edge rather than past it.
+        if s.roof_ridge_plate:
+            self.members.append(TimberMember(
+                'ridge_plate',
+                x=0.0,
+                y=p['rafter_length'] - s.rafter_width,
+                z=0.0,
+                length=p['eave_length'],
+                width=s.rafter_width,
+                depth=plate_t,
+                orientation=self._ORIENT_PLATE,
+            ))
+
+        # 3. Rafters at rafter_spacing along the eave. They span the
+        #    full slope distance so they rest on the wall plate's inner
+        #    face and butt into the ridge plate's inner face.
+        for u in self._rafter_u_positions():
+            self.members.append(TimberMember(
+                'rafter',
+                x=u - s.rafter_width / 2.0,
+                y=0.0,
+                z=0.0,
+                length=p['rafter_length'],
+                width=s.rafter_width,    # extent along u
+                depth=s.rafter_depth,    # perpendicular to the slope face
+                orientation=self._ORIENT_RAFTER,
+            ))
+
+        return self.members
+
+    def _rafter_u_positions(self):
+        """Centres of rafters along the eave axis."""
+        s = self.settings
+        p = self.pitch
+        half_w = s.rafter_width / 2.0
+        spacing = s.rafter_spacing
+
+        positions = [half_w]  # end rafter flush with the gable
+        u = spacing
+        while u < p['eave_length'] - s.rafter_width:
+            positions.append(u)
+            u += spacing
+
+        end = p['eave_length'] - half_w
+        if positions and end - positions[-1] > s.rafter_width:
+            positions.append(end)
+
+        return positions
+
+
+def _apply_roof_appearance(view_object, member_type):
+    """Give roof members distinct colouring so they're visually separate
+    from wall framing and floor joists."""
+    try:
+        colors = {
+            'rafter':           (0.58, 0.40, 0.24),  # cedar-ish
+            'wall_plate_roof':  (0.70, 0.52, 0.33),
+            'ridge_plate':      (0.70, 0.52, 0.33),
+            'roof_sheathing':   (0.86, 0.72, 0.47),
+            'roof_trimmer':     (0.60, 0.42, 0.26),
+            'roof_header':      (0.52, 0.36, 0.22),
+            'roof_tail_rafter': (0.58, 0.40, 0.24),
+        }
+        color = colors.get(member_type, (0.58, 0.40, 0.24))
+        view_object.ShapeColor = color
+        view_object.LineColor = (color[0] * 0.6, color[1] * 0.6, color[2] * 0.6)
+        view_object.Transparency = 0
+        view_object.LineWidth = 1.0
+    except Exception as e:
+        FreeCAD.Console.PrintWarning(
+            f"Could not apply roof appearance: {e}\n"
+        )
+
+
+def _build_roof_box(member, pitch):
+    """Build the world-space solid for one roof member.
+
+    For PLATES: a flat box laid on the eave or ridge line. Extruded
+    upward in world +Z by its vertical thickness (`member.depth`), the
+    box extends `member.width` into the roof along the up-slope axis.
+
+    For RAFTERS: a tilted box resting on the slope face. The base
+    rectangle lies ON the slope face (u, v) with the given rafter width
+    (u-extent) and length (v-extent). The box is then extruded along the
+    face normal (perpendicular to the slope) by `member.depth`, so the
+    rafter stands on edge above the slope surface.
+    """
+    import Part
+
+    origin = pitch['origin_eave']
+    eave = pitch['eave_axis']
+    up = pitch['up_slope_axis']
+    n = pitch['face_normal']
+
+    u0 = member.x
+    v0 = member.y
+    u1 = u0 + member.width
+    v1 = v0 + member.length
+
+    def _P(u, v):
+        return FreeCAD.Vector(
+            origin.x + eave.x * u + up.x * v,
+            origin.y + eave.y * u + up.y * v,
+            origin.z + eave.z * u + up.z * v,
+        )
+
+    if member.orientation == RoofFrameCalculator._ORIENT_PLATE:
+        # The plate's "length" is along the eave (u), but the member was
+        # stored with length = eave_length and width = rafter_width,
+        # which maps to extent along v = rafter_width. Rebuild the four
+        # bottom corners on the slope plane...
+        p1 = _P(u0, v0)
+        p2 = _P(u0 + member.length, v0)
+        p3 = _P(u0 + member.length, v0 + member.width)
+        p4 = _P(u0, v0 + member.width)
+        # ...and extrude straight UP in world Z by the plate's thickness.
+        # This gives a horizontal top face on the plate even though its
+        # bottom follows the (very slight) slope - which is how real
+        # plates sit on a wall below the sloped sheathing.
+        wire = Part.makePolygon([p1, p2, p3, p4, p1])
+        face = Part.Face(wire)
+        return face.extrude(FreeCAD.Vector(0, 0, member.depth))
+
+    if member.orientation == RoofFrameCalculator._ORIENT_RAFTER:
+        # Base rectangle lies on the slope face.
+        p1 = _P(u0, v0)
+        p2 = _P(u1, v0)
+        p3 = _P(u1, v1)
+        p4 = _P(u0, v1)
+        wire = Part.makePolygon([p1, p2, p3, p4, p1])
+        face = Part.Face(wire)
+        # Extrude perpendicular to the slope face by rafter_depth so the
+        # rafter stands on edge above the slope.
+        return face.extrude(
+            FreeCAD.Vector(n.x * member.depth,
+                           n.y * member.depth,
+                           n.z * member.depth)
+        )
+
+    raise ValueError(
+        f"_build_roof_box: unsupported orientation {member.orientation!r}"
+    )
+
+
+def create_roof_frame_group(doc, roof_obj, members, pitch, settings,
+                            group_name=None):
+    """Create a document group containing one Part::Feature per roof member."""
+    if group_name is None:
+        group_name = f"Frame_{roof_obj.Label}"
+
+    group = doc.addObject("App::DocumentObjectGroup", group_name)
+
+    for member in members:
+        try:
+            shape = _build_roof_box(member, pitch)
+        except Exception as e:
+            FreeCAD.Console.PrintError(
+                f"Failed to build shape for {member}: {e}\n"
+            )
+            continue
+
+        part_obj = doc.addObject("Part::Feature", member.get_label())
+        part_obj.Shape = shape
+
+        part_obj.addProperty("App::PropertyString", "TimberType",
+                             "Timber", "Type of timber member")
+        part_obj.TimberType = member.member_type
+        part_obj.addProperty("App::PropertyFloat", "TimberLength",
+                             "Timber", "Length of timber piece")
+        part_obj.TimberLength = member.length
+
+        if part_obj.ViewObject:
+            _apply_roof_appearance(part_obj.ViewObject, member.member_type)
+
+        group.addObject(part_obj)
+
+    return group
+
+
 def _extract_opening_from_bim_object(obj, wall_obj):
     """Extract opening data from a BIM window or door object using bounding boxes."""
     try:

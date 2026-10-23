@@ -3,6 +3,7 @@
 import FreeCAD
 import FreeCADGui
 from PySide import QtCore, QtGui
+import math
 import os
 
 # Import core module
@@ -432,9 +433,33 @@ def _tag_floor_frame_group(group, slab, settings):
         )
 
 
+def _tag_roof_frame_group(group, roof, settings):
+    """Attach SourceRoof + settings metadata so the roof frame can be
+    regenerated the same way wall / floor frames are."""
+    import json
+    try:
+        if not hasattr(group, 'SourceRoof'):
+            group.addProperty(
+                "App::PropertyLink", "SourceRoof", "TimberFrame",
+                "Source BIM roof this rafter frame was generated from"
+            )
+        group.SourceRoof = roof
+
+        if not hasattr(group, 'TimberSettingsJSON'):
+            group.addProperty(
+                "App::PropertyString", "TimberSettingsJSON", "TimberFrame",
+                "Settings used to generate this frame (JSON)"
+            )
+        group.TimberSettingsJSON = json.dumps(settings.to_dict())
+    except Exception as e:
+        FreeCAD.Console.PrintWarning(
+            f"Could not tag roof frame group '{group.Label}': {e}\n"
+        )
+
+
 def _frame_groups_with_source(doc):
-    """Return every frame group that has a SourceWall OR SourceSlab link
-    (i.e. that we know how to regenerate)."""
+    """Return every frame group that has a SourceWall / SourceSlab /
+    SourceRoof link (i.e. that we know how to regenerate)."""
     out = []
     for obj in doc.Objects:
         if not obj.Label.startswith("Frame_"):
@@ -442,6 +467,8 @@ def _frame_groups_with_source(doc):
         if (hasattr(obj, 'SourceWall') and obj.SourceWall is not None):
             out.append(obj)
         elif (hasattr(obj, 'SourceSlab') and obj.SourceSlab is not None):
+            out.append(obj)
+        elif (hasattr(obj, 'SourceRoof') and obj.SourceRoof is not None):
             out.append(obj)
     return out
 
@@ -941,9 +968,10 @@ def _is_roof(obj):
 class ConvertRoofCommand:
     """Convert selected BIM roof(s) to a timber rafter frame.
 
-    R1: stub. The dialog opens, the roof is identified, settings are
-    stored on an empty frame group. Actual geometry is implemented in
-    R2..R6.
+    Phase 1: single-slope (shed) roofs produce wall plate + ridge plate
+    + rafters. Flat roofs (pitch below the threshold) are framed as a
+    horizontal joist platform via the existing floor builder.
+    Multi-slope roofs raise a user-visible error.
     """
 
     def GetResources(self):
@@ -980,20 +1008,99 @@ class ConvertRoofCommand:
             return
         settings = dialog.save_settings()
 
-        # R1 stub: just surface what we picked up. R2+ will build the
-        # frame. We purposely do NOT create a frame group yet so there
-        # is nothing stale to clean up when R2 lands.
-        FreeCAD.Console.PrintMessage(
-            f"Roof conversion is not yet implemented (R1 stub). "
-            f"Picked {len(roofs)} roof(s), "
-            f"rafter_spacing={settings.rafter_spacing:.0f} mm, "
-            f"rafter={settings.rafter_width:.0f}x{settings.rafter_depth:.0f} mm.\n"
+        doc.openTransaction("Convert Roofs to Timber Rafter Frame")
+        try:
+            for roof in roofs:
+                self._convert_roof(doc, roof, settings)
+            doc.commitTransaction()
+            doc.recompute()
+            FreeCAD.Console.PrintMessage(
+                f"Converted {len(roofs)} roof(s) to timber rafter frame.\n"
+            )
+        except NotImplementedError as e:
+            doc.abortTransaction()
+            QtGui.QMessageBox.warning(
+                None, "Multi-slope roof", str(e)
+            )
+        except Exception as e:
+            doc.abortTransaction()
+            import traceback
+            FreeCAD.Console.PrintError(
+                f"Error converting roofs: {e}\n{traceback.format_exc()}"
+            )
+            QtGui.QMessageBox.critical(
+                None, "Error", f"Failed to convert roofs:\n{str(e)}"
+            )
+
+    def _convert_roof(self, doc, roof, settings):
+        """Build a rafter frame for one BIM Roof.
+
+        Phase 1 geometry path. Flat roofs fall back to the floor frame
+        builder so the user does not have to think about which command
+        to use.
+        """
+        pitch = Core.extract_roof_data(
+            roof, flat_threshold_deg=settings.flat_roof_threshold_deg
         )
-        QtGui.QMessageBox.information(
-            None, "Roof conversion - R1",
-            "Settings captured. Geometry builder lands in step R2 "
-            "(rafter + plate layout). No frame has been created yet."
-        )
+
+        if pitch['is_flat']:
+            FreeCAD.Console.PrintMessage(
+                f"Roof '{roof.Label}' is below the flat-roof threshold "
+                f"({settings.flat_roof_threshold_deg:.2f} deg) - framing "
+                "as a horizontal joist platform.\n"
+            )
+            # Build a floor-settings view that reuses the roof's values.
+            floor_settings = Core.TimberSettings()
+            floor_settings.from_dict(settings.to_dict())
+            floor_settings.joist_width = settings.rafter_width
+            floor_settings.joist_depth = settings.rafter_depth
+            floor_settings.joist_spacing = settings.rafter_spacing
+            floor_settings.floor_rim_board = settings.roof_wall_plate
+            floor_settings.floor_sheathing_thickness = (
+                settings.roof_sheathing_thickness
+            )
+            floor_settings.floor_enabled = True
+
+            calc = Core.FloorFrameCalculator(
+                pitch['eave_length'], pitch['rafter_length'], floor_settings
+            )
+            members = calc.calculate()
+            # Build a dict shaped like extract_slab_data so we can reuse
+            # create_floor_frame_group's basis handling verbatim.
+            slab_data = {
+                'origin': pitch['origin_eave'],
+                'x_axis': pitch['eave_axis'],
+                'y_axis': pitch['up_slope_axis'],
+                'top_z': pitch['origin_eave'].z,
+            }
+            group = Core.create_floor_frame_group(
+                doc, roof, members, slab_data, floor_settings
+            )
+        else:
+            FreeCAD.Console.PrintMessage(
+                f"Converting roof '{roof.Label}': "
+                f"eave={pitch['eave_length']:.0f} mm, "
+                f"rafter={pitch['rafter_length']:.0f} mm, "
+                f"slope={math.degrees(pitch['slope_angle_rad']):.2f} deg\n"
+            )
+            calc = Core.RoofFrameCalculator(pitch, settings)
+            members = calc.calculate()
+            FreeCAD.Console.PrintMessage(
+                f"  Generated {len(members)} rafter/plate member(s)\n"
+            )
+            group = Core.create_roof_frame_group(
+                doc, roof, members, pitch, settings
+            )
+
+        _tag_roof_frame_group(group, roof, settings)
+
+        try:
+            if roof.ViewObject is not None:
+                roof.ViewObject.Visibility = False
+        except Exception:
+            pass
+
+        return group
 
 
 class EditFrameCommand:
@@ -1168,10 +1275,11 @@ class RegenerateFrameCommand:
             for group in targets:
                 wall = getattr(group, 'SourceWall', None)
                 slab = getattr(group, 'SourceSlab', None)
-                if wall is None and slab is None:
+                roof = getattr(group, 'SourceRoof', None)
+                if wall is None and slab is None and roof is None:
                     FreeCAD.Console.PrintWarning(
-                        f"'{group.Label}' has no SourceWall/SourceSlab - "
-                        "skipped.\n"
+                        f"'{group.Label}' has no SourceWall/SourceSlab/"
+                        "SourceRoof - skipped.\n"
                     )
                     continue
 
@@ -1204,16 +1312,20 @@ class RegenerateFrameCommand:
                         f"Regenerated wall frame for '{wall.Label}' "
                         f"(Align={getattr(wall, 'Align', 'Left')}).\n"
                     )
-                else:
-                    # Slab-based floor frame.
+                elif slab is not None:
                     _delete_frame_group_recursive(doc, group)
-                    # Force floor framing on regenerate even if the user
-                    # had it disabled when the dialog opened, since the
-                    # existing frame proves it was requested at least once.
                     settings.floor_enabled = True
                     ConvertWallCommand()._convert_slab(doc, slab, settings)
                     FreeCAD.Console.PrintMessage(
                         f"Regenerated floor frame for '{slab.Label}'.\n"
+                    )
+                else:
+                    # Roof-based rafter frame.
+                    _delete_frame_group_recursive(doc, group)
+                    settings.roof_enabled = True
+                    ConvertRoofCommand()._convert_roof(doc, roof, settings)
+                    FreeCAD.Console.PrintMessage(
+                        f"Regenerated roof frame for '{roof.Label}'.\n"
                     )
 
             doc.commitTransaction()
