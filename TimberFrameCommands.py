@@ -288,7 +288,7 @@ class RoofSettingsDialog(_BaseSettingsDialog):
         layout.addWidget(g)
 
         # Perimeter plates
-        g = QtGui.QGroupBox("Plates")
+        g = QtGui.QGroupBox("Perimeter beams")
         f = QtGui.QFormLayout(g)
         self.wall_plate_check = QtGui.QCheckBox(
             "Wall plate on the eave (top of outer wall)"
@@ -300,6 +300,26 @@ class RoofSettingsDialog(_BaseSettingsDialog):
         )
         self.ridge_plate_check.setChecked(True)
         f.addRow("", self.ridge_plate_check)
+        self.rake_plate_check = QtGui.QCheckBox(
+            "Rake plates on the two gable sides"
+        )
+        self.rake_plate_check.setChecked(True)
+        f.addRow("", self.rake_plate_check)
+        layout.addWidget(g)
+
+        # Blocking
+        g = QtGui.QGroupBox("Blocking")
+        f = QtGui.QFormLayout(g)
+        self.roof_blocking_spin = self._create_length_spinbox(0, 3000, 0)
+        self.roof_blocking_spin.setSpecialValueText("off")
+        f.addRow("Blocking Every:", self.roof_blocking_spin)
+        hint = QtGui.QLabel(
+            "Short pieces perpendicular to rafters at the given interval "
+            "along the slope. 0 = no blocking."
+        )
+        hint.setStyleSheet("color: gray; font-size: 10px;")
+        hint.setWordWrap(True)
+        f.addRow("", hint)
         layout.addWidget(g)
 
         # Overhangs
@@ -348,6 +368,8 @@ class RoofSettingsDialog(_BaseSettingsDialog):
         self.rafter_spacing_spin.setValue(s.rafter_spacing)
         self.wall_plate_check.setChecked(s.roof_wall_plate)
         self.ridge_plate_check.setChecked(s.roof_ridge_plate)
+        self.rake_plate_check.setChecked(s.roof_rake_plates)
+        self.roof_blocking_spin.setValue(s.roof_blocking_every)
         self.overhang_eave_spin.setValue(s.roof_overhang_eave)
         self.overhang_rake_spin.setValue(s.roof_overhang_rake)
         self.roof_sheathing_spin.setValue(s.roof_sheathing_thickness)
@@ -360,6 +382,8 @@ class RoofSettingsDialog(_BaseSettingsDialog):
         s.rafter_spacing = self.rafter_spacing_spin.value()
         s.roof_wall_plate = self.wall_plate_check.isChecked()
         s.roof_ridge_plate = self.ridge_plate_check.isChecked()
+        s.roof_rake_plates = self.rake_plate_check.isChecked()
+        s.roof_blocking_every = self.roof_blocking_spin.value()
         s.roof_overhang_eave = self.overhang_eave_spin.value()
         s.roof_overhang_rake = self.overhang_rake_spin.value()
         s.roof_sheathing_thickness = self.roof_sheathing_spin.value()

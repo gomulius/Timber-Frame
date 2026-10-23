@@ -65,6 +65,8 @@ class TimberSettings:
         self.rafter_spacing = 600.0     # mm, centre-to-centre along eave
         self.roof_wall_plate = True     # eave plate on top of outer walls
         self.roof_ridge_plate = True    # ridge plate at the high side
+        self.roof_rake_plates = True    # NEW: rake plates on the two gables
+        self.roof_blocking_every = 0.0  # NEW: mm between rows, 0 = none
         self.roof_sheathing_thickness = 18.0   # mm, 0 = no deck
         self.roof_overhang_eave = 0.0   # mm, extends rafters past eave
         self.roof_overhang_rake = 0.0   # mm, extends plates past gables
@@ -107,6 +109,8 @@ class TimberSettings:
             'roof_sheathing_thickness': self.roof_sheathing_thickness,
             'roof_overhang_eave': self.roof_overhang_eave,
             'roof_overhang_rake': self.roof_overhang_rake,
+            'roof_rake_plates': self.roof_rake_plates,
+            'roof_blocking_every': self.roof_blocking_every,
             'flat_roof_threshold_deg': self.flat_roof_threshold_deg,
         }
     
@@ -172,9 +176,11 @@ class TimberMember:
         'rafter': 'Rafter',
         'wall_plate_roof': 'Roof Wall Plate',
         'ridge_plate': 'Ridge Plate',
+        'rake_plate': 'Rake Plate',
         'roof_trimmer': 'Roof Trimmer',
         'roof_header': 'Roof Header',
         'roof_tail_rafter': 'Tail Rafter',
+        'roof_blocking': 'Roof Blocking',
         'roof_sheathing': 'Roof Sheathing',
     }
     
@@ -1919,8 +1925,10 @@ class RoofFrameCalculator:
     #                   extruded upward (world +Z)
     #   'roof_rafter' - member tilted along +v with its depth normal to
     #                   the slope face
-    _ORIENT_PLATE = 'roof_plate'
-    _ORIENT_RAFTER = 'roof_rafter'
+    _ORIENT_PLATE = 'roof_plate'           # eave / ridge: lies flat
+    _ORIENT_RAFTER = 'roof_rafter'         # rafter: on edge along the slope
+    _ORIENT_RAKE_PLATE = 'roof_rake_plate' # rake: lies flat but runs along slope
+    _ORIENT_BLOCKING = 'roof_blocking'     # block between two rafters
 
     def __init__(self, pitch, settings=None):
         self.pitch = pitch
@@ -1932,72 +1940,149 @@ class RoofFrameCalculator:
         s = self.settings
         p = self.pitch
 
-        # Plate thickness = rafter_width (plate is "laid flat"), plate
-        # depth into the wall = plate's width across the eave. We reuse
-        # rafter_width as both for consistency with light-timber shed
-        # construction; a dedicated plate_depth setting can be added
-        # later if required.
-        plate_t = s.rafter_width
+        # Plate cross-section matches a rafter (rafter_width x rafter_depth)
+        # so the perimeter looks like a proper beam in the reference image
+        # rather than a skinny strip. The plate's "width" (its v-extent
+        # along the slope going into the roof) is set to rafter_width;
+        # its "depth" (vertical thickness in world Z) is set to
+        # rafter_depth. This gives a plate that is as tall as the rafters,
+        # not just the width of one.
+        plate_v_extent = s.rafter_width       # along slope, into the roof
+        plate_height = s.rafter_depth         # vertical thickness
+        rake_width = s.rafter_width           # width along u (across eave)
 
-        # 1. Wall plate on the eave (v = 0).
-        if s.roof_wall_plate:
+        # Flags for which plates are present - rafters will be inset
+        # between whichever perimeter plates exist so the rafters don't
+        # overlap them.
+        has_eave = bool(s.roof_wall_plate)
+        has_ridge = bool(s.roof_ridge_plate)
+        has_rakes = bool(s.roof_rake_plates)
+
+        # 1. Wall plate on the eave (v = 0 .. plate_v_extent).
+        if has_eave:
             self.members.append(TimberMember(
                 'wall_plate_roof',
-                x=0.0,                  # u-start
-                y=0.0,                  # v position
-                z=0.0,                  # unused for plates
+                x=0.0,
+                y=0.0,
+                z=0.0,
                 length=p['eave_length'],
-                width=s.rafter_width,   # extent along v (into the roof)
-                depth=plate_t,          # vertical thickness in world Z
+                width=plate_v_extent,
+                depth=plate_height,
                 orientation=self._ORIENT_PLATE,
             ))
 
-        # 2. Ridge plate at v = rafter_length. Its "width" extent is
-        #    carved OUT of the roof (negative v) so the plate sits just
-        #    short of the ridge edge rather than past it.
-        if s.roof_ridge_plate:
+        # 2. Ridge plate at v = rafter_length - plate_v_extent .. rafter_length.
+        if has_ridge:
             self.members.append(TimberMember(
                 'ridge_plate',
                 x=0.0,
-                y=p['rafter_length'] - s.rafter_width,
+                y=p['rafter_length'] - plate_v_extent,
                 z=0.0,
                 length=p['eave_length'],
-                width=s.rafter_width,
-                depth=plate_t,
+                width=plate_v_extent,
+                depth=plate_height,
                 orientation=self._ORIENT_PLATE,
             ))
 
-        # 3. Rafters at rafter_spacing along the eave. They span the
-        #    full slope distance so they rest on the wall plate's inner
-        #    face and butt into the ridge plate's inner face.
-        for u in self._rafter_u_positions():
+        # 3. Rake plates along the two gable ends (u = 0 and u = eave_length).
+        #    They run FROM the inside face of the wall plate TO the inside
+        #    face of the ridge plate so the four perimeter beams form a
+        #    clean rectangle in the plan view.
+        if has_rakes:
+            v_lo = plate_v_extent if has_eave else 0.0
+            v_hi = (p['rafter_length'] - plate_v_extent) if has_ridge \
+                else p['rafter_length']
+            rake_length = v_hi - v_lo
+            if rake_length > 0:
+                # Low-u rake (at the gable where u = 0).
+                self.members.append(TimberMember(
+                    'rake_plate',
+                    x=0.0,
+                    y=v_lo,
+                    z=0.0,
+                    length=rake_length,     # extent along v (slope dir)
+                    width=rake_width,       # extent along u
+                    depth=plate_height,
+                    orientation=self._ORIENT_RAKE_PLATE,
+                ))
+                # High-u rake (at the gable where u = eave_length).
+                self.members.append(TimberMember(
+                    'rake_plate',
+                    x=p['eave_length'] - rake_width,
+                    y=v_lo,
+                    z=0.0,
+                    length=rake_length,
+                    width=rake_width,
+                    depth=plate_height,
+                    orientation=self._ORIENT_RAKE_PLATE,
+                ))
+
+        # 4. Rafters: INSET between the perimeter plates. In u they stay
+        #    between the two rake plates (if present); in v they run
+        #    between the wall-plate and ridge-plate inner faces.
+        u_lo = rake_width if has_rakes else 0.0
+        u_hi = (p['eave_length'] - rake_width) if has_rakes \
+            else p['eave_length']
+        v_lo = plate_v_extent if has_eave else 0.0
+        v_hi = (p['rafter_length'] - plate_v_extent) if has_ridge \
+            else p['rafter_length']
+        rafter_span = v_hi - v_lo
+
+        rafter_us = self._rafter_u_positions(u_lo, u_hi)
+        for u in rafter_us:
             self.members.append(TimberMember(
                 'rafter',
                 x=u - s.rafter_width / 2.0,
-                y=0.0,
+                y=v_lo,
                 z=0.0,
-                length=p['rafter_length'],
-                width=s.rafter_width,    # extent along u
-                depth=s.rafter_depth,    # perpendicular to the slope face
+                length=rafter_span,
+                width=s.rafter_width,
+                depth=s.rafter_depth,
                 orientation=self._ORIENT_RAFTER,
             ))
 
+        # 5. Blocking (optional): short pieces perpendicular to rafters,
+        #    sitting between consecutive rafter pairs at every
+        #    roof_blocking_every along v.
+        if s.roof_blocking_every and s.roof_blocking_every > 0 and len(rafter_us) >= 2:
+            v = v_lo + s.roof_blocking_every
+            while v < v_hi - s.rafter_width:
+                for a, b in zip(rafter_us[:-1], rafter_us[1:]):
+                    bay_lo = a + s.rafter_width / 2.0
+                    bay_hi = b - s.rafter_width / 2.0
+                    bay_len = bay_hi - bay_lo
+                    if bay_len <= 0:
+                        continue
+                    self.members.append(TimberMember(
+                        'roof_blocking',
+                        x=bay_lo,
+                        y=v,
+                        z=0.0,
+                        length=bay_len,         # extent along u (between rafters)
+                        width=s.rafter_width,   # extent along v (into roof)
+                        depth=s.rafter_depth,
+                        orientation=self._ORIENT_BLOCKING,
+                    ))
+                v += s.roof_blocking_every
+
         return self.members
 
-    def _rafter_u_positions(self):
-        """Centres of rafters along the eave axis."""
+    def _rafter_u_positions(self, u_lo, u_hi):
+        """Centres of rafters along the eave axis, within [u_lo, u_hi]."""
         s = self.settings
-        p = self.pitch
         half_w = s.rafter_width / 2.0
         spacing = s.rafter_spacing
+        span = u_hi - u_lo
+        if span <= 0:
+            return []
 
-        positions = [half_w]  # end rafter flush with the gable
-        u = spacing
-        while u < p['eave_length'] - s.rafter_width:
+        positions = [u_lo + half_w]  # first rafter flush with the rake
+        u = u_lo + spacing
+        while u < u_hi - s.rafter_width:
             positions.append(u)
             u += spacing
 
-        end = p['eave_length'] - half_w
+        end = u_hi - half_w
         if positions and end - positions[-1] > s.rafter_width:
             positions.append(end)
 
@@ -2012,6 +2097,8 @@ def _apply_roof_appearance(view_object, member_type):
             'rafter':           (0.58, 0.40, 0.24),  # cedar-ish
             'wall_plate_roof':  (0.70, 0.52, 0.33),
             'ridge_plate':      (0.70, 0.52, 0.33),
+            'rake_plate':       (0.70, 0.52, 0.33),
+            'roof_blocking':    (0.65, 0.46, 0.28),
             'roof_sheathing':   (0.86, 0.72, 0.47),
             'roof_trimmer':     (0.60, 0.42, 0.26),
             'roof_header':      (0.52, 0.36, 0.22),
@@ -2061,18 +2148,28 @@ def _build_roof_box(member, pitch):
         )
 
     if member.orientation == RoofFrameCalculator._ORIENT_PLATE:
-        # The plate's "length" is along the eave (u), but the member was
-        # stored with length = eave_length and width = rafter_width,
-        # which maps to extent along v = rafter_width. Rebuild the four
-        # bottom corners on the slope plane...
+        # Eave / ridge plate: a long beam laid flat along the eave (u).
+        # The stored geometry has length = eave_length (u-extent) and
+        # width = v-extent (how far it reaches into the roof). Build the
+        # bottom face on the slope plane...
         p1 = _P(u0, v0)
         p2 = _P(u0 + member.length, v0)
         p3 = _P(u0 + member.length, v0 + member.width)
         p4 = _P(u0, v0 + member.width)
-        # ...and extrude straight UP in world Z by the plate's thickness.
-        # This gives a horizontal top face on the plate even though its
-        # bottom follows the (very slight) slope - which is how real
-        # plates sit on a wall below the sloped sheathing.
+        # ...and extrude straight UP in world Z by the plate's thickness
+        # so the top face stays horizontal even on a shallow slope.
+        wire = Part.makePolygon([p1, p2, p3, p4, p1])
+        face = Part.Face(wire)
+        return face.extrude(FreeCAD.Vector(0, 0, member.depth))
+
+    if member.orientation == RoofFrameCalculator._ORIENT_RAKE_PLATE:
+        # Rake plate: like an eave/ridge plate, but runs along +v (up
+        # the slope) and spans u by member.width. Build the base on the
+        # slope face and extrude straight up in world Z.
+        p1 = _P(u0, v0)
+        p2 = _P(u0 + member.width, v0)
+        p3 = _P(u0 + member.width, v0 + member.length)
+        p4 = _P(u0, v0 + member.length)
         wire = Part.makePolygon([p1, p2, p3, p4, p1])
         face = Part.Face(wire)
         return face.extrude(FreeCAD.Vector(0, 0, member.depth))
@@ -2085,8 +2182,21 @@ def _build_roof_box(member, pitch):
         p4 = _P(u0, v1)
         wire = Part.makePolygon([p1, p2, p3, p4, p1])
         face = Part.Face(wire)
-        # Extrude perpendicular to the slope face by rafter_depth so the
-        # rafter stands on edge above the slope.
+        return face.extrude(
+            FreeCAD.Vector(n.x * member.depth,
+                           n.y * member.depth,
+                           n.z * member.depth)
+        )
+
+    if member.orientation == RoofFrameCalculator._ORIENT_BLOCKING:
+        # Blocking: short piece between two rafters, oriented like a
+        # rafter (on edge, extruded along the slope normal) but short.
+        p1 = _P(u0, v0)
+        p2 = _P(u0 + member.length, v0)
+        p3 = _P(u0 + member.length, v0 + member.width)
+        p4 = _P(u0, v0 + member.width)
+        wire = Part.makePolygon([p1, p2, p3, p4, p1])
+        face = Part.Face(wire)
         return face.extrude(
             FreeCAD.Vector(n.x * member.depth,
                            n.y * member.depth,
