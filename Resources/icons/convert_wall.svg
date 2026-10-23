@@ -1,22 +1,22 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
-  <!-- Solid wall (left side) -->
-  <rect x="4" y="8" width="24" height="48" fill="#808080" stroke="#404040" stroke-width="2"/>
-  
-  <!-- Arrow -->
-  <polygon points="34,32 40,26 40,29 48,29 48,35 40,35 40,38" fill="#4CAF50"/>
-  
-  <!-- Timber frame (right side) -->
-  <g transform="translate(32, 0)">
-    <!-- Bottom plate -->
-    <rect x="6" y="50" width="22" height="4" fill="#DEB887" stroke="#8B4513" stroke-width="1"/>
-    <!-- Top plate -->
-    <rect x="6" y="10" width="22" height="4" fill="#DEB887" stroke="#8B4513" stroke-width="1"/>
-    <!-- Left stud -->
-    <rect x="7" y="14" width="3" height="36" fill="#DEB887" stroke="#8B4513" stroke-width="1"/>
-    <!-- Middle stud -->
-    <rect x="15" y="14" width="3" height="36" fill="#DEB887" stroke="#8B4513" stroke-width="1"/>
-    <!-- Right stud -->
-    <rect x="24" y="14" width="3" height="36" fill="#DEB887" stroke="#8B4513" stroke-width="1"/>
+  <!-- Solid wall (source) on the left -->
+  <rect x="4" y="8" width="18" height="48" fill="#808080"
+        stroke="#404040" stroke-width="2"/>
+
+  <!-- Clearly visible right-arrow in the gap -->
+  <polygon points="26,32 36,22 36,28 46,28 46,36 36,36 36,42"
+           fill="#4CAF50" stroke="#2E7D32" stroke-width="1"/>
+
+  <!-- Timber frame (result) on the right, placed well clear of the arrow -->
+  <g stroke="#8B4513" stroke-width="1">
+    <!-- top plate -->
+    <rect x="48" y="10" width="12" height="4" fill="#DEB887"/>
+    <!-- bottom plate -->
+    <rect x="48" y="50" width="12" height="4" fill="#DEB887"/>
+    <!-- studs -->
+    <rect x="49" y="14" width="3" height="36" fill="#DEB887"/>
+    <rect x="54" y="14" width="3" height="36" fill="#DEB887"/>
+    <rect x="59" y="14" width="1" height="36" fill="#DEB887"/>
   </g>
 </svg>
