@@ -2045,23 +2045,42 @@ class RoofFrameCalculator:
                 orientation=self._ORIENT_RAFTER,
             ))
 
-        # 5. Battens (optional): tile battens / laty running ACROSS the
-        #    rafters, SITTING ON TOP of them. They create the air gap
-        #    between the roof insulation (below the rafters) and the
-        #    roof tiles / panels (above the battens). They run the full
-        #    length of the eave (u-direction, perpendicular to rafters)
-        #    and are placed at roof_batten_every intervals along the
-        #    slope (v-direction) starting from the eave.
+        # 5. Battens (optional): tile battens / kontrlaty running ACROSS
+        #    the rafters, SITTING ON TOP of them. They create the air gap
+        #    between the insulation (below the rafters) and the roof
+        #    tiles / panels (above the battens).
+        #
+        #    Rule: there is ALWAYS a batten flush with the eave edge
+        #    (v = v_lo) and ALWAYS one flush with the ridge edge
+        #    (v = v_hi - batten_width). Otherwise the first and last row
+        #    of tiles has nothing to nail onto. Intermediate battens are
+        #    then spaced evenly at roof_batten_every centres between
+        #    those two ends.
         if s.roof_batten_every and s.roof_batten_every > 0:
             bw = s.roof_batten_width
             bd = s.roof_batten_depth
-            # Full-width span: between the two rake plates if present.
             batten_u0 = u_lo
             batten_len = (u_hi - u_lo) if (u_hi > u_lo) else p['eave_length']
             if u_hi <= u_lo:
                 batten_u0 = 0.0  # fall back to full eave if no rakes
-            v = v_lo + s.roof_batten_every
-            while v < v_hi - bw:
+
+            v_first = v_lo                   # eave edge
+            v_last = v_hi - bw               # ridge edge
+            if v_last < v_first:
+                v_last = v_first             # degenerate: too narrow
+
+            # Build the sorted set of v positions.
+            vs = [v_first]
+            v = v_first + s.roof_batten_every
+            # Keep a safety margin equal to the batten width so the last
+            # intermediate doesn't overlap the edge batten.
+            while v < v_last - bw * 0.5:
+                vs.append(v)
+                v += s.roof_batten_every
+            if v_last > v_first:
+                vs.append(v_last)
+
+            for v in vs:
                 self.members.append(TimberMember(
                     'roof_batten',
                     x=batten_u0,
@@ -2072,7 +2091,6 @@ class RoofFrameCalculator:
                     depth=bd,           # thickness perpendicular to slope
                     orientation=self._ORIENT_BATTEN,
                 ))
-                v += s.roof_batten_every
 
         return self.members
 
